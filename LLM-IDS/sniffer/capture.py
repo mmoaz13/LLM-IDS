@@ -4,9 +4,10 @@ Note: capturing raw packets requires elevated privileges — run with sudo on
 Linux/macOS, or as Administrator on Windows (with Npcap installed).
 """
 
+import threading
 from typing import Optional
 
-from scapy.all import sniff, IP, TCP, UDP
+from scapy.all import IFACES, AsyncSniffer, sniff, IP, TCP, UDP
 
 from sniffer.flow_tracker import FlowTracker
 
@@ -18,14 +19,35 @@ def _tcp_flags_str(tcp_layer) -> str:
     return str(tcp_layer.flags)
 
 
+def list_interfaces() -> list:
+    """Friendly, sorted (label, iface) entries for every network interface
+    Scapy can see. `iface` is the actual object Scapy's iface= parameter
+    expects — passing the object (rather than converting it to a name
+    string) sidesteps the \\Device\\NPF_{GUID} formatting Windows requires,
+    since Scapy resolves the object directly.
+    """
+    entries = []
+    for iface in IFACES.values():
+        name = getattr(iface, "name", None) or str(iface)
+        description = getattr(iface, "description", None) or name
+        entries.append({"label": description, "name": name, "iface": iface})
+    entries.sort(key=lambda e: e["label"].lower())
+    return entries
+
+
 class PacketSniffer:
-    """Wraps scapy.sniff() and pushes each captured packet into a FlowTracker."""
+    """Wraps Scapy's sniffing into a FlowTracker feed, in either blocking
+    (start) or background-thread (start_async/stop_async) mode."""
 
     def __init__(self, flow_tracker: FlowTracker, interface: Optional[str] = None):
         self.flow_tracker = flow_tracker
         self.interface = interface
+        self.packet_count = 0
+        self._async_sniffer = None
 
     def _handle_packet(self, packet):
+        self.packet_count += 1
+
         if IP not in packet:
             return  # skip non-IP traffic (ARP, etc.)
 
@@ -49,3 +71,47 @@ class PacketSniffer:
     def start(self):
         """Blocking call — run this in its own thread (see main.py)."""
         sniff(iface=self.interface, prn=self._handle_packet, store=False)
+
+    def start_async(self, ready_timeout: float = 5.0):
+        """Non-blocking: starts capture in a background thread and returns
+        only once capture has actually begun — or raises if it failed to
+        (e.g. missing admin/root privileges), rather than leaving the
+        caller to discover a silently-dead thread later. Used by the
+        dashboard's Live Capture tab.
+        """
+        started_event = threading.Event()
+        self._async_sniffer = AsyncSniffer(
+            iface=self.interface,
+            prn=self._handle_packet,
+            store=False,
+            started_callback=started_event.set,
+        )
+        self._async_sniffer.start()
+
+        started_event.wait(timeout=ready_timeout)
+        thread_alive = (
+            self._async_sniffer.thread is not None
+            and self._async_sniffer.thread.is_alive()
+        )
+
+        # Scapy opens the raw socket before invoking started_callback, so a
+        # permission/adapter failure raises inside the sniff thread and
+        # lands here as .exception, before started_callback ever fires.
+        if self._async_sniffer.exception is not None:
+            raise self._async_sniffer.exception
+        if not started_event.is_set() and not thread_alive:
+            raise RuntimeError(
+                "Packet capture failed to start. This usually means the "
+                "process needs admin/root privileges, or (Windows) Npcap "
+                "isn't installed."
+            )
+
+    def stop_async(self):
+        if self._async_sniffer is None:
+            return
+        try:
+            if self._async_sniffer.running:
+                self._async_sniffer.stop()
+        except Exception:
+            pass
+        self._async_sniffer = None

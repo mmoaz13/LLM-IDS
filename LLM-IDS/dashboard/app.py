@@ -1,12 +1,16 @@
-"""Streamlit dashboard — four tabs:
-  • Live Monitor     : reads results written by main.py in real time, plus
-                        per-flow incident reports and analyst feedback
+"""Streamlit dashboard — five tabs:
+  • Live Capture      : pick a network adapter and start/stop capture, run
+                        entirely inside this process (needs admin/root)
+  • Live Monitor      : reads results written by main.py (or Live Capture)
+                        in real time, plus per-flow incident reports and
+                        analyst feedback
   • Upload PCAP       : upload a .pcap file, analyze it on the spot, show results
   • Simulate Attacks  : generate synthetic traffic on the fly and analyze it
   • Ask               : ask a natural-language question over stored results
 """
 
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -15,6 +19,8 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from storage import db
+from sniffer.capture import list_interfaces
+from sniffer.live_session import LiveCaptureSession
 from sniffer.pcap_reader import process_pcap
 from analyzer.llm_client import LLMClient
 from analyzer.report_generator import generate as generate_report
@@ -66,8 +72,8 @@ st.markdown(
 db.init_db()
 llm = LLMClient()
 
-TAB_LIVE, TAB_UPLOAD, TAB_SIMULATE, TAB_ASK = st.tabs(
-    ["Live Monitor", "Upload PCAP", "Simulate Attacks", "Ask"]
+TAB_CAPTURE, TAB_LIVE, TAB_UPLOAD, TAB_SIMULATE, TAB_ASK = st.tabs(
+    ["Live Capture", "Live Monitor", "Upload PCAP", "Simulate Attacks", "Ask"]
 )
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -143,7 +149,73 @@ def _run_scenario_and_collect(scenario: dict, timeout_seconds: float = 15):
     return len(packets), sim_results, summary
 
 
-# ── Tab 1: Live Monitor ───────────────────────────────────────────────────────
+# ── Tab 1: Live Capture ────────────────────────────────────────────────────────
+
+with TAB_CAPTURE:
+    st.subheader("Capture live traffic from a network adapter")
+    st.caption(
+        "Runs the same sniff → flow → feature → LLM pipeline as `main.py`, but started "
+        "and stopped right here. Capturing raw packets needs admin/root privileges — "
+        "if this Streamlit process wasn't launched elevated, starting capture will fail "
+        "with a clear error rather than silently doing nothing."
+    )
+
+    session = st.session_state.get("capture_session")
+
+    if session is None or not session.running:
+        interfaces = list_interfaces()
+        if not interfaces:
+            st.error("No network interfaces detected.")
+        else:
+            iface_labels = [entry["label"] for entry in interfaces]
+            selected_label = st.selectbox("Network adapter", iface_labels, key="capture_iface_select")
+            selected_iface = next(e["iface"] for e in interfaces if e["label"] == selected_label)
+
+            if st.button("Start Capture", key="start_capture_btn", type="primary"):
+                new_session = LiveCaptureSession(
+                    interface=selected_iface,
+                    interface_label=selected_label,
+                    llm_client=llm,
+                )
+                try:
+                    new_session.start()
+                    st.session_state["capture_session"] = new_session
+                    st.rerun()
+                except Exception as exc:
+                    st.error(
+                        f"Failed to start capture on **{selected_label}**: {exc}\n\n"
+                        "This usually means the process wasn't launched with admin/root "
+                        "privileges, or (Windows) Npcap isn't installed."
+                    )
+    else:
+        st.success(f"Capturing on **{session.interface_label}**")
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Packets seen", session.packets_seen)
+        col2.metric("Active flows", session.active_flow_count)
+        col3.metric("Flows classified", session.flows_classified)
+        col4.metric("Elapsed", f"{int(time.time() - session.started_at)}s")
+
+        if session.last_error:
+            st.warning(f"Last error in the background classify loop: {session.last_error}")
+
+        st.caption(
+            "Capture keeps running in the background even if you switch tabs or navigate "
+            "away — click Stop Capture to end it. Classified flows appear in Live Monitor."
+        )
+
+        col_refresh, col_stop = st.columns(2)
+        with col_refresh:
+            if st.button("Refresh status", key="refresh_capture_btn"):
+                st.rerun()
+        with col_stop:
+            if st.button("Stop Capture", key="stop_capture_btn"):
+                session.stop()
+                st.session_state["capture_session"] = None
+                st.rerun()
+
+
+# ── Tab 2: Live Monitor ───────────────────────────────────────────────────────
 
 with TAB_LIVE:
     st.subheader("Real-time flow analysis from network interfaces")
@@ -254,7 +326,7 @@ with TAB_LIVE:
                     )
 
 
-# ── Tab 2: Upload PCAP ────────────────────────────────────────────────────────
+# ── Tab 3: Upload PCAP ────────────────────────────────────────────────────────
 
 with TAB_UPLOAD:
     st.subheader("Analyze a .pcap / .pcapng capture file")
@@ -365,7 +437,7 @@ with TAB_UPLOAD:
             )
 
 
-# ── Tab 3: Simulate Attacks ────────────────────────────────────────────────────
+# ── Tab 4: Simulate Attacks ────────────────────────────────────────────────────
 
 with TAB_SIMULATE:
     st.subheader("Generate synthetic traffic and analyze it instantly")
@@ -420,7 +492,7 @@ with TAB_SIMULATE:
                         st.dataframe(grouped, use_container_width=True)
 
 
-# ── Tab 4: Ask ─────────────────────────────────────────────────────────────────
+# ── Tab 5: Ask ─────────────────────────────────────────────────────────────────
 
 with TAB_ASK:
     st.subheader("Ask a question about your flow history")

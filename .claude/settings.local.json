@@ -17,7 +17,18 @@
       "Bash(./venv/Scripts/python.exe -m pytest tests/test_flow_tracker.py tests/test_llm_client.py tests/test_pcap_reader.py -q)",
       "Bash(./venv/Scripts/python.exe -m pytest tests/test_pcap_reader.py -q)",
       "Bash(./venv/Scripts/python.exe -m py_compile dashboard/app.py storage/db.py)",
-      "Bash(powershell -Command \"Stop-Process -Id 31840 -Force\")"
+      "Bash(powershell -Command \"Stop-Process -Id 31840 -Force\")",
+      "Bash(./venv/Scripts/python.exe -m py_compile sniffer/capture.py sniffer/live_session.py)",
+      "Bash(./venv/Scripts/python.exe -m py_compile dashboard/app.py)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_capture.py -v)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_live_session.py -v)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId = 27936\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8502 --max-time 5)",
+      "Bash(curl -s -o /dev/null https://www.google.com --max-time 5)",
+      "Bash(curl -s -o /dev/null https://www.wikipedia.org --max-time 5)",
+      "PowerShell(Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object Name, InterfaceDescription, Status | Format-Table -AutoSize)",
+      "Bash(curl -s -o /dev/null https://www.example.com --max-time 5)",
+      "Bash(curl -s -o /dev/null https://www.python.org --max-time 5)"
     ]
   }
 }
