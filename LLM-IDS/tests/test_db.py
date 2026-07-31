@@ -117,6 +117,17 @@ class TestSaveAndRead:
         results = db.get_recent_results(limit=10)
         assert len(results) == 5
 
+    def test_save_result_returns_the_new_rows_id(self, temp_db):
+        row_id = db.save_result(_sample_features(), _sample_verdict())
+        fetched = db.get_result_by_id(row_id)
+        assert fetched is not None
+        assert fetched["flow_id"] == "10.0.0.1:5000->10.0.0.2:80/TCP"
+
+    def test_save_result_ids_increase_with_each_call(self, temp_db):
+        first_id = db.save_result(_sample_features(flow_id="a"), _sample_verdict())
+        second_id = db.save_result(_sample_features(flow_id="b"), _sample_verdict())
+        assert second_id > first_id
+
 
 # ===========================================================================
 # 3. features_json integrity (regression test for str()-vs-json.dumps() bug)

@@ -60,10 +60,13 @@ def init_db():
         conn.commit()
 
 
-def save_result(features: dict, verdict: dict):
+def save_result(features: dict, verdict: dict) -> int:
+    """Returns the new row's id, so callers that need to reference this
+    exact flow later (e.g. attaching feedback to it) don't have to look it
+    back up."""
     proto = features["protocol_info"]
     with _connect() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """INSERT INTO flow_results
                (timestamp, flow_id, src_ip, dst_ip, src_port, dst_port, protocol,
                 classification, confidence, explanation, features_json)
@@ -76,6 +79,7 @@ def save_result(features: dict, verdict: dict):
             ),
         )
         conn.commit()
+        return cursor.lastrowid
 
 
 def get_recent_results(limit: int = 100):

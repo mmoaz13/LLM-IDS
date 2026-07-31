@@ -323,6 +323,34 @@ class TestResultsAccumulation:
                 session.stop()
 
     @patch("sniffer.live_session.PacketSniffer")
+    def test_result_entry_carries_id_and_features_for_report_and_feedback(self, mock_sniffer_cls, temp_db):
+        """The dashboard's Flow tools (incident report, analyst feedback)
+        must be able to act on a session-scoped entry directly, without a
+        separate database-wide lookup — so each entry needs the same real
+        row id save_result() produced, plus the feature data a report is
+        built from."""
+        session = _make_session(expiry_check_interval=10, flow_timeout_seconds=600)
+        session.start()
+        try:
+            session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000, 80, "TCP", 100, "S")
+            session.stop()
+
+            entry = session.results[0]
+            assert isinstance(entry["id"], int)
+
+            # The id must correspond to a real row (feedback references it
+            # via a foreign key).
+            saved = db.get_result_by_id(entry["id"])
+            assert saved is not None
+            assert saved["flow_id"] == entry["flow_id"]
+
+            # features_json must be usable by report_generator as-is.
+            assert entry["features_json"]["flow_id"] == entry["flow_id"]
+        finally:
+            if session.running:
+                session.stop()
+
+    @patch("sniffer.live_session.PacketSniffer")
     def test_failed_classification_is_not_recorded_in_results(self, mock_sniffer_cls, temp_db):
         """A flow whose classify() call raises must not produce a
         half-formed entry in results — only successful classifications

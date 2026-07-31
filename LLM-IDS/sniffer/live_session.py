@@ -100,12 +100,18 @@ class LiveCaptureSession:
         try:
             features = compute_features(flow)
             verdict = self.llm.classify(features)
-            db.save_result(features, verdict)
+            row_id = db.save_result(features, verdict)
             self.results.append({
+                # Mirrors the shape of a storage.db row (id + features_json)
+                # so report_generator / save_feedback can use this entry
+                # directly — the dashboard never has to fall back to a
+                # database-wide lookup just to act on a flow it already has.
+                "id": row_id,
                 "flow_id": features["flow_id"],
                 "classification": verdict["classification"],
                 "confidence": round(verdict["confidence"], 2),
                 "explanation": verdict["explanation"],
+                "features_json": features,
             })
             self.flows_classified += 1
         except Exception as exc:

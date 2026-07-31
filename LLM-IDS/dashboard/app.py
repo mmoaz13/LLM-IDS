@@ -1,11 +1,11 @@
 """Streamlit dashboard — four tabs:
   • Live Capture      : pick a network adapter and start/stop capture (runs
                         entirely inside this process, needs admin/root),
-                        plus a session-scoped results table showing only
-                        what THIS capture run has classified — starts empty,
-                        never carries over previous runs or history — with a
-                        separate Flow tools panel for searching the full
-                        historical database (per-flow reports and feedback)
+                        plus a session-scoped results table and Flow tools
+                        panel (search, incident reports, analyst feedback)
+                        that only ever show what THIS capture run has
+                        classified — starts empty, never carries over
+                        previous runs or unrelated history
   • Upload PCAP       : upload a .pcap file, analyze it on the spot, show results
   • Simulate Attacks  : generate synthetic traffic on the fly and analyze it
   • Ask               : ask a natural-language question over stored results
@@ -234,7 +234,7 @@ with TAB_CAPTURE:
     st.caption(
         "Only flows captured by Live Capture in this browser session — starts empty and "
         "never shows anything left over from a previous run or from `main.py` running "
-        "separately. Use Flow tools below to search the full historical database instead."
+        "separately."
     )
 
     live_results = session.results if (session is not None and session.running) else st.session_state["capture_results"]
@@ -259,8 +259,8 @@ with TAB_CAPTURE:
     st.divider()
     st.subheader("Flow tools")
     st.caption(
-        "Search to find a specific flow among however many are stored, across all "
-        "history — independent of the session-scoped results above — then write a full "
+        "Search among the flows captured in this session — same scope as the table "
+        "above, nothing from a previous run or from `main.py` — then write a full "
         "incident report or record analyst feedback on its verdict."
     )
 
@@ -277,15 +277,18 @@ with TAB_CAPTURE:
             key="tools_classification",
         )
 
-    tools_filters = {"search": flow_search}
+    matching_flows = live_results
     if tools_classification != "All":
-        tools_filters["classification"] = tools_classification
-    matching_flows = db.query_results(tools_filters, limit=200)
+        matching_flows = [r for r in matching_flows if r["classification"] == tools_classification]
+    search_term = flow_search.strip().lower()
+    if search_term:
+        matching_flows = [r for r in matching_flows if search_term in r["flow_id"].lower()]
+    matching_flows = list(reversed(matching_flows))  # most recently captured first
 
     if not matching_flows:
-        st.info("No flows match that search.")
+        st.info("No flows match that search yet — capture some traffic above first.")
     else:
-        st.caption(f"{len(matching_flows)} matching flow(s) — newest first, capped at 200.")
+        st.caption(f"{len(matching_flows)} matching flow(s) from this session.")
         flow_options = {f"#{r['id']} — {r['flow_id']} ({r['classification']})": r for r in matching_flows}
         selected_label = st.selectbox("Select a flow", list(flow_options.keys()), key="tools_flow_select")
         selected_row = flow_options[selected_label]
