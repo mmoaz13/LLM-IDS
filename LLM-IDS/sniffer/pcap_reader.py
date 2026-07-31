@@ -79,8 +79,14 @@ def process_pcap(
             tracker.add_packet(ip.src, ip.dst, 0, 0,
                                f"PROTO-{ip.proto}", size)
 
-    # Force-close every remaining flow (file is finished, no more packets coming)
-    for flow in tracker.pop_finished_flows():
+    # Force-close every remaining flow (file is finished, no more packets coming).
+    # pop_finished_flows() only returns flows that are already closed or timed
+    # out relative to *wall-clock* time — since this whole loop runs in a few
+    # milliseconds, flows without an explicit FIN/RST (e.g. a scan or flood
+    # that never completes a handshake) would never qualify and would be
+    # silently dropped. pop_all_flows() drains everything unconditionally,
+    # which is correct here because there are no more packets coming.
+    for flow in tracker.pop_all_flows():
         features = compute_features(flow)
         on_flow_ready(features)
         summary["total_flows"] += 1

@@ -262,3 +262,92 @@ class TestRequestConstruction:
         assert payload["stream"] is False
         assert payload["format"] == "json"
         assert "flow_id" in payload["prompt"]
+
+
+# ===========================================================================
+# 7. generate_text (free-form prose, e.g. incident reports)
+# ===========================================================================
+
+class TestGenerateText:
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_returns_stripped_response_text(self, mock_post):
+        mock_post.return_value = _mock_ollama_response("  ## Report\n\nSome markdown.  ")
+        client = LLMClient()
+        result = client.generate_text("write something")
+        assert result == "## Report\n\nSome markdown."
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_does_not_request_json_format(self, mock_post):
+        mock_post.return_value = _mock_ollama_response("free text")
+        client = LLMClient()
+        client.generate_text("write something")
+        payload = mock_post.call_args.kwargs["json"]
+        assert "format" not in payload
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_transport_failure_falls_back_to_provided_fallback(self, mock_post):
+        mock_post.side_effect = requests.ConnectionError("refused")
+        client = LLMClient()
+        result = client.generate_text("write something", fallback="default text")
+        assert result == "default text"
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_transport_failure_without_fallback_returns_error_message(self, mock_post):
+        mock_post.side_effect = requests.ConnectionError("refused")
+        client = LLMClient()
+        result = client.generate_text("write something")
+        assert "refused" in result
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_transport_failure_never_raises(self, mock_post):
+        mock_post.side_effect = requests.Timeout("timed out")
+        client = LLMClient()
+        # Must not raise — callers rely on this always returning a string.
+        result = client.generate_text("write something")
+        assert isinstance(result, str)
+
+
+# ===========================================================================
+# 8. generate_json (structured-but-not-classification uses, e.g. NL query parsing)
+# ===========================================================================
+
+class TestGenerateJson:
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_returns_parsed_dict(self, mock_post):
+        mock_post.return_value = _mock_ollama_response('{"classification": "Attack", "port": 22}')
+        client = LLMClient()
+        result = client.generate_json("parse this")
+        assert result == {"classification": "Attack", "port": 22}
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_requests_json_format(self, mock_post):
+        mock_post.return_value = _mock_ollama_response("{}")
+        client = LLMClient()
+        client.generate_json("parse this")
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["format"] == "json"
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_invalid_json_fails_safe_to_empty_dict(self, mock_post):
+        mock_post.return_value = _mock_ollama_response("not json at all")
+        client = LLMClient()
+        result = client.generate_json("parse this")
+        assert result == {}
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_transport_failure_fails_safe_to_empty_dict(self, mock_post):
+        mock_post.side_effect = requests.ConnectionError("refused")
+        client = LLMClient()
+        result = client.generate_json("parse this")
+        assert result == {}
+
+    @patch("analyzer.llm_client.requests.post")
+    def test_non_dict_json_still_returned_as_is(self, mock_post):
+        """generate_json doesn't validate shape beyond "is it JSON" — callers
+        (like query_parser.parse) are responsible for validating structure."""
+        mock_post.return_value = _mock_ollama_response("[1, 2, 3]")
+        client = LLMClient()
+        result = client.generate_json("parse this")
+        assert result == [1, 2, 3]

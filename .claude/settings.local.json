@@ -6,7 +6,16 @@
       "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -m venv venv)",
       "Bash(./venv/Scripts/python.exe -m pip install --quiet --upgrade pip)",
       "Bash(./venv/Scripts/python.exe -m pip install --quiet -r requirements.txt)",
-      "Bash(./venv/Scripts/python.exe -m pytest tests/ -v)"
+      "Bash(./venv/Scripts/python.exe -m pytest tests/ -v)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_llm_client.py -q)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_db.py -q)",
+      "Bash(./venv/Scripts/python.exe -c ' *)",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(./venv/Scripts/python.exe -m py_compile dashboard/app.py analyzer/query_parser.py analyzer/report_generator.py analyzer/llm_client.py storage/db.py sniffer/flow_tracker.py sniffer/pcap_reader.py simulator/traffic_generator.py simulator/generate_samples.py)",
+      "Bash(mkdir -p \"/c/Users/ahmed/Downloads/Telegram Desktop/LLM-IDS/.claude\")",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/ -q)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_flow_tracker.py tests/test_llm_client.py tests/test_pcap_reader.py -q)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_pcap_reader.py -q)"
     ]
   }
 }

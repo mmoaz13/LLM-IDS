@@ -305,6 +305,49 @@ class TestActiveFlowProtection:
 
 
 # ===========================================================================
+# 6b. pop_all_flows (force-drain, used at end-of-file for pcap analysis)
+# ===========================================================================
+
+class TestPopAllFlows:
+
+    def test_pop_all_flows_returns_open_flows_regardless_of_timeout(self, tracker):
+        """Unlike pop_finished_flows, an active flow within its timeout
+        window must still be returned — there's no more data coming, so
+        waiting for a timeout that will never naturally arrive is wrong."""
+        _add(tracker, flags="S")
+        assert tracker.pop_finished_flows() == []  # not finished by the normal rule
+        drained = tracker.pop_all_flows()
+        assert len(drained) == 1
+
+    def test_pop_all_flows_empties_the_tracker(self, tracker):
+        for port in range(5):
+            _add(tracker, sport=8000 + port)
+        assert tracker.active_flow_count() == 5
+        tracker.pop_all_flows()
+        assert tracker.active_flow_count() == 0
+
+    def test_pop_all_flows_includes_already_closed_flows_too(self, tracker):
+        """A flow closed by FIN/RST must still come back from pop_all_flows,
+        same as an open one — nothing is left behind."""
+        _add(tracker, sport=9000, flags="S")
+        _add(tracker, sport=9000, flags="FA")  # closed
+        _add(tracker, sport=9001, flags="S")   # still open
+        drained = tracker.pop_all_flows()
+        assert len(drained) == 2
+
+    def test_pop_all_flows_on_empty_tracker_returns_empty_list(self, tracker):
+        assert tracker.pop_all_flows() == []
+
+    def test_pop_all_flows_is_a_one_time_drain(self, tracker):
+        """Calling it twice in a row must not return the same flows again."""
+        _add(tracker, flags="S")
+        first = tracker.pop_all_flows()
+        second = tracker.pop_all_flows()
+        assert len(first) == 1
+        assert second == []
+
+
+# ===========================================================================
 # 7. Packet metadata integrity
 # ===========================================================================
 

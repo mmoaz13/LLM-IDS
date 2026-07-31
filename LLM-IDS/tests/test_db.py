@@ -24,6 +24,7 @@ Requirements
 """
 
 import json
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -49,14 +50,21 @@ def temp_db(tmp_path, monkeypatch):
     return db_path
 
 
-def _sample_features(flow_id="10.0.0.1:5000->10.0.0.2:80/TCP"):
+def _connect_raw(db_path):
+    """Direct sqlite3 connection for test setup that db.py's public API
+    doesn't expose (e.g. back-dating a row's timestamp)."""
+    return sqlite3.connect(str(db_path))
+
+
+def _sample_features(flow_id="10.0.0.1:5000->10.0.0.2:80/TCP", protocol="TCP",
+                      src_ip="10.0.0.1", dst_ip="10.0.0.2", src_port=5000, dst_port=80):
     return {
         "flow_id": flow_id,
         "statistics": {"duration_seconds": 1.0, "packet_count": 4, "byte_count": 400,
                         "avg_packet_size": 100.0, "packets_per_second": 4.0,
                         "fwd_packet_count": 2, "rev_packet_count": 2},
-        "protocol_info": {"protocol": "TCP", "src_ip": "10.0.0.1", "dst_ip": "10.0.0.2",
-                           "src_port": 5000, "dst_port": 80},
+        "protocol_info": {"protocol": protocol, "src_ip": src_ip, "dst_ip": dst_ip,
+                           "src_port": src_port, "dst_port": dst_port},
         "flags": {"syn_count": 1, "ack_count": 3, "fin_count": 0, "rst_count": 0,
                   "psh_count": 1, "urg_count": 0, "syn_without_ack": False},
     }
@@ -160,3 +168,125 @@ class TestOrderingAndLimits:
 
     def test_no_results_returns_empty_list(self, temp_db):
         assert db.get_recent_results() == []
+
+
+# ===========================================================================
+# 5. get_result_by_id
+# ===========================================================================
+
+class TestGetResultById:
+
+    def test_returns_the_matching_row(self, temp_db):
+        db.save_result(_sample_features(flow_id="target"), _sample_verdict())
+        [row] = db.get_recent_results()
+        fetched = db.get_result_by_id(row["id"])
+        assert fetched["flow_id"] == "target"
+
+    def test_missing_id_returns_none(self, temp_db):
+        assert db.get_result_by_id(9999) is None
+
+
+# ===========================================================================
+# 6. query_results (used by the NL "Ask" feature)
+# ===========================================================================
+
+class TestQueryResults:
+
+    def test_no_filters_returns_everything_up_to_limit(self, temp_db):
+        for i in range(3):
+            db.save_result(_sample_features(flow_id=f"flow-{i}"), _sample_verdict())
+        results = db.query_results({}, limit=10)
+        assert len(results) == 3
+
+    def test_filters_by_classification(self, temp_db):
+        db.save_result(_sample_features(flow_id="a"), _sample_verdict(classification="Attack"))
+        db.save_result(_sample_features(flow_id="b"), _sample_verdict(classification="Benign"))
+        results = db.query_results({"classification": "Attack"}, limit=10)
+        assert [r["flow_id"] for r in results] == ["a"]
+
+    def test_filters_by_protocol(self, temp_db):
+        db.save_result(_sample_features(flow_id="tcp-flow", protocol="TCP"), _sample_verdict())
+        db.save_result(_sample_features(flow_id="udp-flow", protocol="UDP"), _sample_verdict())
+        results = db.query_results({"protocol": "UDP"}, limit=10)
+        assert [r["flow_id"] for r in results] == ["udp-flow"]
+
+    def test_filters_by_src_ip(self, temp_db):
+        db.save_result(_sample_features(flow_id="a", src_ip="1.2.3.4"), _sample_verdict())
+        db.save_result(_sample_features(flow_id="b", src_ip="5.6.7.8"), _sample_verdict())
+        results = db.query_results({"src_ip": "1.2.3.4"}, limit=10)
+        assert [r["flow_id"] for r in results] == ["a"]
+
+    def test_filters_by_dst_ip(self, temp_db):
+        db.save_result(_sample_features(flow_id="a", dst_ip="9.9.9.9"), _sample_verdict())
+        db.save_result(_sample_features(flow_id="b", dst_ip="8.8.8.8"), _sample_verdict())
+        results = db.query_results({"dst_ip": "9.9.9.9"}, limit=10)
+        assert [r["flow_id"] for r in results] == ["a"]
+
+    def test_port_filter_matches_either_src_or_dst_port(self, temp_db):
+        db.save_result(_sample_features(flow_id="src-match", src_port=2222, dst_port=80), _sample_verdict())
+        db.save_result(_sample_features(flow_id="dst-match", src_port=5000, dst_port=2222), _sample_verdict())
+        db.save_result(_sample_features(flow_id="no-match", src_port=5000, dst_port=80), _sample_verdict())
+        results = db.query_results({"port": 2222}, limit=10)
+        assert {r["flow_id"] for r in results} == {"src-match", "dst-match"}
+
+    def test_since_minutes_ago_excludes_older_rows(self, temp_db):
+        db.save_result(_sample_features(flow_id="old"), _sample_verdict())
+        with _connect_raw(temp_db) as conn:
+            conn.execute("UPDATE flow_results SET timestamp = ? WHERE flow_id = 'old'",
+                         (time.time() - 3600,))  # 1 hour ago
+            conn.commit()
+        db.save_result(_sample_features(flow_id="recent"), _sample_verdict())
+
+        results = db.query_results({"since_minutes_ago": 10}, limit=10)
+        assert [r["flow_id"] for r in results] == ["recent"]
+
+    def test_combined_filters_are_and_ed_together(self, temp_db):
+        db.save_result(_sample_features(flow_id="match", protocol="TCP"),
+                        _sample_verdict(classification="Attack"))
+        db.save_result(_sample_features(flow_id="wrong-protocol", protocol="UDP"),
+                        _sample_verdict(classification="Attack"))
+        db.save_result(_sample_features(flow_id="wrong-classification", protocol="TCP"),
+                        _sample_verdict(classification="Benign"))
+        results = db.query_results({"classification": "Attack", "protocol": "TCP"}, limit=10)
+        assert [r["flow_id"] for r in results] == ["match"]
+
+    def test_limit_is_respected(self, temp_db):
+        for i in range(5):
+            db.save_result(_sample_features(flow_id=f"flow-{i}"), _sample_verdict())
+        results = db.query_results({}, limit=2)
+        assert len(results) == 2
+
+    def test_values_are_parameterized_not_interpolated(self, temp_db):
+        """A filter value containing SQL syntax must be treated as a literal
+        string to match against, never executed."""
+        db.save_result(_sample_features(flow_id="a", src_ip="1.2.3.4"), _sample_verdict())
+        malicious = "1.2.3.4' OR '1'='1"
+        results = db.query_results({"src_ip": malicious}, limit=10)
+        assert results == []  # no row has that literal src_ip, so nothing matches
+
+
+# ===========================================================================
+# 7. Feedback (human-in-the-loop corrections)
+# ===========================================================================
+
+class TestFeedback:
+
+    def test_save_and_summarize_feedback(self, temp_db):
+        db.save_result(_sample_features(), _sample_verdict())
+        [row] = db.get_recent_results()
+
+        db.save_feedback(row["id"], row["classification"], "correct")
+        db.save_feedback(row["id"], row["classification"], "false_positive", note="too aggressive")
+
+        summary = db.get_feedback_summary()
+        assert summary == {"correct": 1, "false_positive": 1}
+
+    def test_empty_feedback_summary_is_empty_dict(self, temp_db):
+        assert db.get_feedback_summary() == {}
+
+    def test_feedback_note_defaults_to_empty_string(self, temp_db):
+        db.save_result(_sample_features(), _sample_verdict())
+        [row] = db.get_recent_results()
+        db.save_feedback(row["id"], row["classification"], "correct")
+        # No exception, and the summary still reflects the row
+        assert db.get_feedback_summary()["correct"] == 1

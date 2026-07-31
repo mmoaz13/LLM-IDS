@@ -99,6 +99,18 @@ class FlowTracker:
                     finished.append(self._flows.pop(key))
         return finished
 
+    def pop_all_flows(self) -> List[Flow]:
+        """Remove and return every currently tracked flow, regardless of
+        closed/timeout state. Used when the packet source is exhausted (e.g.
+        end of a pcap file) and nothing more will ever arrive to close or
+        time out a flow naturally — unlike live capture, there's no "later"
+        to wait for.
+        """
+        with self._lock:
+            flows = list(self._flows.values())
+            self._flows.clear()
+        return flows
+
     def active_flow_count(self) -> int:
         with self._lock:
             return len(self._flows)

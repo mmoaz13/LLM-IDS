@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "llm-ids-dashboard",
+      "runtimeExecutable": "LLM-IDS/venv/Scripts/streamlit.exe",
+      "runtimeArgs": ["run", "LLM-IDS/dashboard/app.py", "--server.headless=true", "--server.port=8501"],
+      "port": 8501
+    }
+  ]
+}

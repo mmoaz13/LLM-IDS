@@ -1,5 +1,9 @@
 """Central configuration for the LLM-IDS project."""
 
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 # Network capture
 NETWORK_INTERFACE = None     # None = let Scapy pick the default interface
 FLOW_TIMEOUT_SECONDS = 15    # seconds of inactivity before a flow is considered closed
@@ -11,4 +15,4 @@ OLLAMA_MODEL = "llama3.1:8b"   # swap for "mistral" or "phi3" if you want faster
 LLM_TIMEOUT_SECONDS = 120
 
 # Storage
-DB_PATH = "storage/flows.db"
+DB_PATH = str(PROJECT_ROOT / "storage" / "flows.db")
