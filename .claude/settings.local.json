@@ -15,7 +15,9 @@
       "Bash(mkdir -p \"/c/Users/ahmed/Downloads/Telegram Desktop/LLM-IDS/.claude\")",
       "Bash(./venv/Scripts/python.exe -m pytest tests/ -q)",
       "Bash(./venv/Scripts/python.exe -m pytest tests/test_flow_tracker.py tests/test_llm_client.py tests/test_pcap_reader.py -q)",
-      "Bash(./venv/Scripts/python.exe -m pytest tests/test_pcap_reader.py -q)"
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_pcap_reader.py -q)",
+      "Bash(./venv/Scripts/python.exe -m py_compile dashboard/app.py storage/db.py)",
+      "Bash(powershell -Command \"Stop-Process -Id 31840 -Force\")"
     ]
   }
 }

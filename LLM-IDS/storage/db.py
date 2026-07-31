@@ -97,12 +97,15 @@ def get_result_by_id(result_id: int):
 
 
 def query_results(filters: dict, limit: int = 50):
-    """Filtered read used by the NL query feature. `filters` is a dict with
-    any of: classification, protocol, src_ip, dst_ip, port (matches either
-    src_port or dst_port), since_minutes_ago. All values are bound as SQL
-    parameters — filters may originate from LLM output, so nothing from
-    `filters` is ever concatenated into the query string itself, only the
-    column layout (which we control) determines the query's shape.
+    """Filtered read used by the NL query feature and the dashboard's flow
+    search. `filters` is a dict with any of: classification, protocol,
+    src_ip, dst_ip, port (matches either src_port or dst_port),
+    since_minutes_ago, search (free-text substring match against flow_id,
+    src_ip, dst_ip, src_port, or dst_port). All values are bound as SQL
+    parameters — filters may originate from LLM output or raw user input, so
+    nothing from `filters` is ever concatenated into the query string
+    itself, only the column layout (which we control) determines the
+    query's shape.
     """
     clauses = []
     params = []
@@ -126,6 +129,14 @@ def query_results(filters: dict, limit: int = 50):
         cutoff = time.time() - (filters["since_minutes_ago"] * 60)
         clauses.append("timestamp >= ?")
         params.append(cutoff)
+    search = (filters.get("search") or "").strip()
+    if search:
+        like_term = f"%{search}%"
+        clauses.append(
+            "(flow_id LIKE ? OR src_ip LIKE ? OR dst_ip LIKE ? "
+            "OR CAST(src_port AS TEXT) LIKE ? OR CAST(dst_port AS TEXT) LIKE ?)"
+        )
+        params.extend([like_term] * 5)
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     params.append(limit)

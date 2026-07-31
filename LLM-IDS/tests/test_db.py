@@ -187,7 +187,7 @@ class TestGetResultById:
 
 
 # ===========================================================================
-# 6. query_results (used by the NL "Ask" feature)
+# 6. query_results (used by the NL "Ask" feature and the dashboard's flow search)
 # ===========================================================================
 
 class TestQueryResults:
@@ -263,6 +263,63 @@ class TestQueryResults:
         malicious = "1.2.3.4' OR '1'='1"
         results = db.query_results({"src_ip": malicious}, limit=10)
         assert results == []  # no row has that literal src_ip, so nothing matches
+
+
+# ===========================================================================
+# 6b. query_results 'search' filter (free-text flow picker)
+# ===========================================================================
+
+class TestQueryResultsSearch:
+
+    def test_search_matches_substring_of_flow_id(self, temp_db):
+        db.save_result(
+            _sample_features(flow_id="10.0.0.1:5000->10.0.0.2:80/TCP", src_ip="10.0.0.1", dst_ip="10.0.0.2"),
+            _sample_verdict(),
+        )
+        db.save_result(
+            _sample_features(flow_id="9.9.9.9:1234->8.8.8.8:53/UDP", src_ip="9.9.9.9", dst_ip="8.8.8.8"),
+            _sample_verdict(),
+        )
+        results = db.query_results({"search": "10.0.0.1"}, limit=10)
+        assert len(results) == 1
+        assert "10.0.0.1" in results[0]["flow_id"]
+
+    def test_search_matches_src_ip(self, temp_db):
+        db.save_result(_sample_features(flow_id="a", src_ip="203.0.113.5"), _sample_verdict())
+        db.save_result(_sample_features(flow_id="b", src_ip="192.168.1.1"), _sample_verdict())
+        results = db.query_results({"search": "203.0.113.5"}, limit=10)
+        assert [r["flow_id"] for r in results] == ["a"]
+
+    def test_search_matches_dst_port_substring(self, temp_db):
+        db.save_result(_sample_features(flow_id="a", dst_port=8443), _sample_verdict())
+        db.save_result(_sample_features(flow_id="b", dst_port=80), _sample_verdict())
+        results = db.query_results({"search": "8443"}, limit=10)
+        assert [r["flow_id"] for r in results] == ["a"]
+
+    def test_search_combined_with_classification_filter(self, temp_db):
+        db.save_result(_sample_features(flow_id="a", src_ip="10.0.0.9"),
+                        _sample_verdict(classification="Attack"))
+        db.save_result(_sample_features(flow_id="b", src_ip="10.0.0.9"),
+                        _sample_verdict(classification="Benign"))
+        results = db.query_results({"search": "10.0.0.9", "classification": "Attack"}, limit=10)
+        assert [r["flow_id"] for r in results] == ["a"]
+
+    def test_blank_search_is_ignored(self, temp_db):
+        db.save_result(_sample_features(flow_id="a"), _sample_verdict())
+        db.save_result(_sample_features(flow_id="b"), _sample_verdict())
+        results = db.query_results({"search": "   "}, limit=10)
+        assert len(results) == 2
+
+    def test_no_match_returns_empty_list(self, temp_db):
+        db.save_result(_sample_features(flow_id="a"), _sample_verdict())
+        results = db.query_results({"search": "nothing-matches-this"}, limit=10)
+        assert results == []
+
+    def test_search_term_is_parameterized_not_interpolated(self, temp_db):
+        db.save_result(_sample_features(flow_id="a", src_ip="1.2.3.4"), _sample_verdict())
+        malicious = "%' OR '1'='1"
+        results = db.query_results({"search": malicious}, limit=10)
+        assert results == []  # treated as a literal substring, not SQL
 
 
 # ===========================================================================

@@ -179,53 +179,79 @@ with TAB_LIVE:
 
         st.divider()
         st.subheader("Flow tools")
-        st.caption("Pick a flow below to write a full incident report or record analyst feedback on its verdict.")
+        st.caption(
+            "Search to find a specific flow among however many are stored — this queries "
+            "the database directly, independent of the 'Rows to show' limit above — then "
+            "write a full incident report or record analyst feedback on its verdict."
+        )
 
-        flow_options = {f"#{r['id']} — {r['flow_id']} ({r['classification']})": r for r in results}
-        selected_label = st.selectbox("Select a flow", list(flow_options.keys()), key="tools_flow_select")
-        selected_row = flow_options[selected_label]
-
-        col_report, col_feedback = st.columns(2)
-
-        with col_report:
-            st.markdown("**Incident report**")
-            if st.button("Generate report", key="gen_report_btn"):
-                with st.spinner("Writing report…"):
-                    st.session_state["last_report"] = generate_report(selected_row, llm)
-                    st.session_state["last_report_flow"] = selected_row["flow_id"]
-
-            if st.session_state.get("last_report"):
-                st.markdown(st.session_state["last_report"])
-                safe_name = st.session_state.get("last_report_flow", "flow").replace(":", "_").replace("/", "_")
-                st.download_button(
-                    "Download report (.md)",
-                    data=st.session_state["last_report"],
-                    file_name=f"incident_{safe_name}.md",
-                    mime="text/markdown",
-                )
-
-        with col_feedback:
-            st.markdown("**Analyst feedback**")
-            feedback_choice = st.radio(
-                "Was this verdict correct?",
-                list(FEEDBACK_LABELS.keys()),
-                key="feedback_choice",
+        col_search, col_class = st.columns([3, 1])
+        with col_search:
+            flow_search = st.text_input(
+                "Search by flow ID, IP, or port",
+                key="flow_search",
+                placeholder="e.g. 10.0.0.5, 443, or part of a flow ID",
             )
-            note = st.text_input("Note (optional)", key="feedback_note")
-            if st.button("Submit feedback", key="submit_feedback_btn"):
-                db.save_feedback(
-                    selected_row["id"], selected_row["classification"],
-                    FEEDBACK_LABELS[feedback_choice], note,
-                )
-                st.success("Feedback recorded.")
+        with col_class:
+            tools_classification = st.selectbox(
+                "Classification", ["All", "Attack", "Suspicious", "Benign"],
+                key="tools_classification",
+            )
 
-            fb_summary = db.get_feedback_summary()
-            if fb_summary:
-                st.caption(
-                    f"Recorded so far — correct: {fb_summary.get('correct', 0)}, "
-                    f"false positives: {fb_summary.get('false_positive', 0)}, "
-                    f"false negatives: {fb_summary.get('false_negative', 0)}"
+        tools_filters = {"search": flow_search}
+        if tools_classification != "All":
+            tools_filters["classification"] = tools_classification
+        matching_flows = db.query_results(tools_filters, limit=200)
+
+        if not matching_flows:
+            st.info("No flows match that search.")
+        else:
+            st.caption(f"{len(matching_flows)} matching flow(s) — newest first, capped at 200.")
+            flow_options = {f"#{r['id']} — {r['flow_id']} ({r['classification']})": r for r in matching_flows}
+            selected_label = st.selectbox("Select a flow", list(flow_options.keys()), key="tools_flow_select")
+            selected_row = flow_options[selected_label]
+
+            col_report, col_feedback = st.columns(2)
+
+            with col_report:
+                st.markdown("**Incident report**")
+                if st.button("Generate report", key="gen_report_btn"):
+                    with st.spinner("Writing report…"):
+                        st.session_state["last_report"] = generate_report(selected_row, llm)
+                        st.session_state["last_report_flow"] = selected_row["flow_id"]
+
+                if st.session_state.get("last_report"):
+                    st.markdown(st.session_state["last_report"])
+                    safe_name = st.session_state.get("last_report_flow", "flow").replace(":", "_").replace("/", "_")
+                    st.download_button(
+                        "Download report (.md)",
+                        data=st.session_state["last_report"],
+                        file_name=f"incident_{safe_name}.md",
+                        mime="text/markdown",
+                    )
+
+            with col_feedback:
+                st.markdown("**Analyst feedback**")
+                feedback_choice = st.radio(
+                    "Was this verdict correct?",
+                    list(FEEDBACK_LABELS.keys()),
+                    key="feedback_choice",
                 )
+                note = st.text_input("Note (optional)", key="feedback_note")
+                if st.button("Submit feedback", key="submit_feedback_btn"):
+                    db.save_feedback(
+                        selected_row["id"], selected_row["classification"],
+                        FEEDBACK_LABELS[feedback_choice], note,
+                    )
+                    st.success("Feedback recorded.")
+
+                fb_summary = db.get_feedback_summary()
+                if fb_summary:
+                    st.caption(
+                        f"Recorded so far — correct: {fb_summary.get('correct', 0)}, "
+                        f"false positives: {fb_summary.get('false_positive', 0)}, "
+                        f"false negatives: {fb_summary.get('false_negative', 0)}"
+                    )
 
 
 # ── Tab 2: Upload PCAP ────────────────────────────────────────────────────────
