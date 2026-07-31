@@ -35,6 +35,11 @@ class LiveCaptureSession:
         self.started_at = None
         self.flows_classified = 0
         self.last_error = None
+        # Every flow this session has classified, in order — the dashboard
+        # shows this directly rather than reading the (globally-persistent,
+        # cross-session) database, so the table only ever reflects what this
+        # capture actually saw.
+        self.results = []
 
     @property
     def running(self) -> bool:
@@ -60,24 +65,51 @@ class LiveCaptureSession:
         self._worker_thread = threading.Thread(target=self._classify_loop, daemon=True)
         self._worker_thread.start()
 
-    def stop(self):
+    def stop(self, progress_callback=None):
+        """Stops the sniffer and the background loop, then classifies
+        whatever flows were still in progress (not yet closed or timed out)
+        rather than discarding them. Without this, stopping shortly after
+        starting would silently drop most of what was just captured — the
+        same issue pcap_reader.py had before it gained pop_all_flows().
+
+        progress_callback(done, total), if given, is called once per
+        flushed flow so the caller can show progress for what may be a
+        slow step (each flow is a real LLM call).
+        """
         self._stop_event.set()
         self.sniffer.stop_async()
         if self._worker_thread is not None:
             self._worker_thread.join(timeout=5)
         self._worker_thread = None
 
+        remaining = self.tracker.pop_all_flows()
+        for i, flow in enumerate(remaining, start=1):
+            self._classify_and_record(flow)
+            if progress_callback:
+                progress_callback(i, len(remaining))
+
     def _classify_loop(self):
-        while not self._stop_event.is_set():
-            time.sleep(self.expiry_check_interval)
+        # wait() returns as soon as _stop_event is set, unlike sleep() —
+        # so stop() doesn't have to wait out a full expiry_check_interval
+        # before it can join this thread.
+        while not self._stop_event.wait(timeout=self.expiry_check_interval):
             for flow in self.tracker.pop_finished_flows():
-                try:
-                    features = compute_features(flow)
-                    verdict = self.llm.classify(features)
-                    db.save_result(features, verdict)
-                    self.flows_classified += 1
-                except Exception as exc:
-                    # Keep the loop alive on a single bad flow — an IDS that
-                    # stops watching traffic because one classification blew
-                    # up is worse than one that logs and keeps going.
-                    self.last_error = str(exc)
+                self._classify_and_record(flow)
+
+    def _classify_and_record(self, flow):
+        try:
+            features = compute_features(flow)
+            verdict = self.llm.classify(features)
+            db.save_result(features, verdict)
+            self.results.append({
+                "flow_id": features["flow_id"],
+                "classification": verdict["classification"],
+                "confidence": round(verdict["confidence"], 2),
+                "explanation": verdict["explanation"],
+            })
+            self.flows_classified += 1
+        except Exception as exc:
+            # Keep the loop alive on a single bad flow — an IDS that
+            # stops watching traffic because one classification blew
+            # up is worse than one that logs and keeps going.
+            self.last_error = str(exc)

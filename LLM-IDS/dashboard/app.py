@@ -1,9 +1,11 @@
 """Streamlit dashboard — four tabs:
   • Live Capture      : pick a network adapter and start/stop capture (runs
                         entirely inside this process, needs admin/root),
-                        plus the real-time results table for whatever
-                        main.py or this capture has written, with per-flow
-                        search, incident reports, and analyst feedback
+                        plus a session-scoped results table showing only
+                        what THIS capture run has classified — starts empty,
+                        never carries over previous runs or history — with a
+                        separate Flow tools panel for searching the full
+                        historical database (per-flow reports and feedback)
   • Upload PCAP       : upload a .pcap file, analyze it on the spot, show results
   • Simulate Attacks  : generate synthetic traffic on the fly and analyze it
   • Ask               : ask a natural-language question over stored results
@@ -161,6 +163,7 @@ with TAB_CAPTURE:
     )
 
     session = st.session_state.get("capture_session")
+    st.session_state.setdefault("capture_results", [])
 
     if session is None or not session.running:
         interfaces = list_interfaces()
@@ -180,6 +183,7 @@ with TAB_CAPTURE:
                 try:
                     new_session.start()
                     st.session_state["capture_session"] = new_session
+                    st.session_state["capture_results"] = []  # fresh table for this run
                     st.rerun()
                 except Exception as exc:
                     st.error(
@@ -202,7 +206,7 @@ with TAB_CAPTURE:
         st.caption(
             "Capture keeps running in the background even if you switch tabs or navigate "
             "away — click Stop Capture to end it. Classified flows appear in the results "
-            "below."
+            "below; click Refresh status to pull the latest while still capturing."
         )
 
         col_refresh, col_stop = st.columns(2)
@@ -211,31 +215,34 @@ with TAB_CAPTURE:
                 st.rerun()
         with col_stop:
             if st.button("Stop Capture", key="stop_capture_btn"):
-                session.stop()
+                stop_progress = st.empty()
+
+                def _on_stop_progress(done, total, _bar=stop_progress):
+                    _bar.progress(
+                        done / total,
+                        text=f"Classifying flows still in progress… {done}/{total}",
+                    )
+
+                with st.spinner("Stopping capture…"):
+                    session.stop(progress_callback=_on_stop_progress)
+                st.session_state["capture_results"] = list(session.results)
                 st.session_state["capture_session"] = None
                 st.rerun()
 
     st.divider()
-    st.subheader("Real-time flow analysis")
+    st.subheader("Captured flows")
     st.caption(
-        "Results written by `main.py` or the capture above. Click Refresh to pull the latest."
+        "Only flows captured by Live Capture in this browser session — starts empty and "
+        "never shows anything left over from a previous run or from `main.py` running "
+        "separately. Use Flow tools below to search the full historical database instead."
     )
 
-    col_refresh, col_limit = st.columns([1, 3])
-    with col_refresh:
-        if st.button("Refresh", key="refresh_results_btn"):
-            st.rerun()
-    with col_limit:
-        limit = st.slider("Rows to show", 10, 500, 100, key="live_limit")
+    live_results = session.results if (session is not None and session.running) else st.session_state["capture_results"]
 
-    results = db.get_recent_results(limit=limit)
-
-    if not results:
-        st.info("No flows yet. Make sure `main.py` is running and traffic is being generated.")
+    if not live_results:
+        st.info("No flows captured yet in this session. Start a capture above to see results here.")
     else:
-        df = pd.DataFrame(results)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
-
+        df = pd.DataFrame(live_results)
         _render_metrics(df)
         st.divider()
 
@@ -247,83 +254,83 @@ with TAB_CAPTURE:
         if filter_opt != "All":
             df = df[df["classification"] == filter_opt]
 
-        _render_table(df, ["timestamp", "flow_id", "classification", "confidence", "explanation"])
+        _render_table(df, ["flow_id", "classification", "confidence", "explanation"])
 
-        st.divider()
-        st.subheader("Flow tools")
-        st.caption(
-            "Search to find a specific flow among however many are stored — this queries "
-            "the database directly, independent of the 'Rows to show' limit above — then "
-            "write a full incident report or record analyst feedback on its verdict."
+    st.divider()
+    st.subheader("Flow tools")
+    st.caption(
+        "Search to find a specific flow among however many are stored, across all "
+        "history — independent of the session-scoped results above — then write a full "
+        "incident report or record analyst feedback on its verdict."
+    )
+
+    col_search, col_class = st.columns([3, 1])
+    with col_search:
+        flow_search = st.text_input(
+            "Search by flow ID, IP, or port",
+            key="flow_search",
+            placeholder="e.g. 10.0.0.5, 443, or part of a flow ID",
+        )
+    with col_class:
+        tools_classification = st.selectbox(
+            "Classification", ["All", "Attack", "Suspicious", "Benign"],
+            key="tools_classification",
         )
 
-        col_search, col_class = st.columns([3, 1])
-        with col_search:
-            flow_search = st.text_input(
-                "Search by flow ID, IP, or port",
-                key="flow_search",
-                placeholder="e.g. 10.0.0.5, 443, or part of a flow ID",
-            )
-        with col_class:
-            tools_classification = st.selectbox(
-                "Classification", ["All", "Attack", "Suspicious", "Benign"],
-                key="tools_classification",
-            )
+    tools_filters = {"search": flow_search}
+    if tools_classification != "All":
+        tools_filters["classification"] = tools_classification
+    matching_flows = db.query_results(tools_filters, limit=200)
 
-        tools_filters = {"search": flow_search}
-        if tools_classification != "All":
-            tools_filters["classification"] = tools_classification
-        matching_flows = db.query_results(tools_filters, limit=200)
+    if not matching_flows:
+        st.info("No flows match that search.")
+    else:
+        st.caption(f"{len(matching_flows)} matching flow(s) — newest first, capped at 200.")
+        flow_options = {f"#{r['id']} — {r['flow_id']} ({r['classification']})": r for r in matching_flows}
+        selected_label = st.selectbox("Select a flow", list(flow_options.keys()), key="tools_flow_select")
+        selected_row = flow_options[selected_label]
 
-        if not matching_flows:
-            st.info("No flows match that search.")
-        else:
-            st.caption(f"{len(matching_flows)} matching flow(s) — newest first, capped at 200.")
-            flow_options = {f"#{r['id']} — {r['flow_id']} ({r['classification']})": r for r in matching_flows}
-            selected_label = st.selectbox("Select a flow", list(flow_options.keys()), key="tools_flow_select")
-            selected_row = flow_options[selected_label]
+        col_report, col_feedback = st.columns(2)
 
-            col_report, col_feedback = st.columns(2)
+        with col_report:
+            st.markdown("**Incident report**")
+            if st.button("Generate report", key="gen_report_btn"):
+                with st.spinner("Writing report…"):
+                    st.session_state["last_report"] = generate_report(selected_row, llm)
+                    st.session_state["last_report_flow"] = selected_row["flow_id"]
 
-            with col_report:
-                st.markdown("**Incident report**")
-                if st.button("Generate report", key="gen_report_btn"):
-                    with st.spinner("Writing report…"):
-                        st.session_state["last_report"] = generate_report(selected_row, llm)
-                        st.session_state["last_report_flow"] = selected_row["flow_id"]
-
-                if st.session_state.get("last_report"):
-                    st.markdown(st.session_state["last_report"])
-                    safe_name = st.session_state.get("last_report_flow", "flow").replace(":", "_").replace("/", "_")
-                    st.download_button(
-                        "Download report (.md)",
-                        data=st.session_state["last_report"],
-                        file_name=f"incident_{safe_name}.md",
-                        mime="text/markdown",
-                    )
-
-            with col_feedback:
-                st.markdown("**Analyst feedback**")
-                feedback_choice = st.radio(
-                    "Was this verdict correct?",
-                    list(FEEDBACK_LABELS.keys()),
-                    key="feedback_choice",
+            if st.session_state.get("last_report"):
+                st.markdown(st.session_state["last_report"])
+                safe_name = st.session_state.get("last_report_flow", "flow").replace(":", "_").replace("/", "_")
+                st.download_button(
+                    "Download report (.md)",
+                    data=st.session_state["last_report"],
+                    file_name=f"incident_{safe_name}.md",
+                    mime="text/markdown",
                 )
-                note = st.text_input("Note (optional)", key="feedback_note")
-                if st.button("Submit feedback", key="submit_feedback_btn"):
-                    db.save_feedback(
-                        selected_row["id"], selected_row["classification"],
-                        FEEDBACK_LABELS[feedback_choice], note,
-                    )
-                    st.success("Feedback recorded.")
 
-                fb_summary = db.get_feedback_summary()
-                if fb_summary:
-                    st.caption(
-                        f"Recorded so far — correct: {fb_summary.get('correct', 0)}, "
-                        f"false positives: {fb_summary.get('false_positive', 0)}, "
-                        f"false negatives: {fb_summary.get('false_negative', 0)}"
-                    )
+        with col_feedback:
+            st.markdown("**Analyst feedback**")
+            feedback_choice = st.radio(
+                "Was this verdict correct?",
+                list(FEEDBACK_LABELS.keys()),
+                key="feedback_choice",
+            )
+            note = st.text_input("Note (optional)", key="feedback_note")
+            if st.button("Submit feedback", key="submit_feedback_btn"):
+                db.save_feedback(
+                    selected_row["id"], selected_row["classification"],
+                    FEEDBACK_LABELS[feedback_choice], note,
+                )
+                st.success("Feedback recorded.")
+
+            fb_summary = db.get_feedback_summary()
+            if fb_summary:
+                st.caption(
+                    f"Recorded so far — correct: {fb_summary.get('correct', 0)}, "
+                    f"false positives: {fb_summary.get('false_positive', 0)}, "
+                    f"false negatives: {fb_summary.get('false_negative', 0)}"
+                )
 
 
 # ── Tab 2: Upload PCAP ────────────────────────────────────────────────────────
