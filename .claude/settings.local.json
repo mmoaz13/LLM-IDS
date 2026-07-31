@@ -34,7 +34,9 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8504 --max-time 5)",
       "PowerShell(Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\")",
       "Bash(./venv/Scripts/python.exe -m py_compile dashboard/app.py storage/db.py sniffer/live_session.py)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8505 --max-time 5)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8505 --max-time 5)",
+      "Bash(./venv/Scripts/python.exe -m py_compile dashboard/app.py sniffer/live_session.py)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8506 --max-time 5)"
     ]
   }
 }

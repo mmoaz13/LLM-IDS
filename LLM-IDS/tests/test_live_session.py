@@ -54,15 +54,26 @@ def temp_db(tmp_path, monkeypatch):
 
 
 class FakeLLM:
-    def __init__(self, fail_on_call=None):
+    def __init__(self, fail_on_call=None, delay=0):
         self.calls = 0
         self._fail_on_call = fail_on_call
+        self._delay = delay
 
     def classify(self, features):
         self.calls += 1
+        if self._delay:
+            time.sleep(self._delay)
         if self._fail_on_call == self.calls:
             raise RuntimeError("simulated classification failure")
         return {"classification": "Benign", "confidence": 0.9, "explanation": "ok"}
+
+
+def _wait_for_flush(session, timeout=3):
+    """Background flush after stop() isn't synchronous anymore — poll for
+    it to finish instead of asserting immediately."""
+    deadline = time.time() + timeout
+    while session.flush_running and time.time() < deadline:
+        time.sleep(0.02)
 
 
 def _make_session(**overrides):
@@ -224,10 +235,35 @@ class TestFastStop:
         elapsed = time.time() - start
         assert elapsed < 2, f"stop() took {elapsed:.2f}s — should be near-instant"
 
+    @patch("sniffer.live_session.PacketSniffer")
+    def test_stop_returns_quickly_even_with_many_slow_active_flows(self, mock_sniffer_cls, temp_db):
+        """Regression test: stop() must never block on classifying whatever
+        flows were still active — that work (a real LLM call per flow) now
+        happens in a background thread. Simulates a slow LLM (0.3s/call)
+        across several active flows; stop() itself must still return almost
+        instantly regardless."""
+        llm = FakeLLM(delay=0.3)
+        session = _make_session(llm_client=llm, expiry_check_interval=10, flow_timeout_seconds=600)
+        session.start()
+        try:
+            for port in range(5):
+                session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000 + port, 80, "TCP", 100, "S")
+
+            start = time.time()
+            session.stop()
+            elapsed = time.time() - start
+
+            assert elapsed < 1, f"stop() took {elapsed:.2f}s — must not wait on flow classification"
+            # The flows are still expected to get classified — just later.
+            assert session.flush_running or session.flows_classified > 0
+        finally:
+            _wait_for_flush(session)
+
 
 # ===========================================================================
 # 7. Flush on stop (regression test: in-progress flows must not be
-#    silently discarded when capture stops)
+#    silently discarded when capture stops — but classifying them must
+#    happen in the background, not block stop() itself)
 # ===========================================================================
 
 class TestFlushOnStop:
@@ -248,13 +284,15 @@ class TestFlushOnStop:
             assert session.flows_classified == 0  # not yet processed by the loop
 
             session.stop()
+            assert session.tracker.active_flow_count() == 0  # handed off synchronously
+            _wait_for_flush(session)
 
             assert session.flows_classified == 1
-            assert session.tracker.active_flow_count() == 0
             assert len(db.get_recent_results()) == 1
         finally:
             if session.running:
                 session.stop()
+            _wait_for_flush(session)
 
     @patch("sniffer.live_session.PacketSniffer")
     def test_multiple_active_flows_are_all_flushed(self, mock_sniffer_cls, temp_db):
@@ -264,10 +302,12 @@ class TestFlushOnStop:
             for port in range(5):
                 session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000 + port, 80, "TCP", 100, "S")
             session.stop()
+            _wait_for_flush(session)
             assert session.flows_classified == 5
         finally:
             if session.running:
                 session.stop()
+            _wait_for_flush(session)
 
     @patch("sniffer.live_session.PacketSniffer")
     def test_stop_with_no_active_flows_does_not_raise(self, mock_sniffer_cls, temp_db):
@@ -275,22 +315,26 @@ class TestFlushOnStop:
         session.start()
         session.stop()  # must not raise
         assert session.flows_classified == 0
+        assert session.flush_running is False
 
     @patch("sniffer.live_session.PacketSniffer")
-    def test_progress_callback_invoked_once_per_flushed_flow(self, mock_sniffer_cls, temp_db):
+    def test_flush_progress_is_pollable_via_flush_done_and_flush_total(self, mock_sniffer_cls, temp_db):
         session = _make_session(expiry_check_interval=10, flow_timeout_seconds=600)
         session.start()
         try:
             for port in range(3):
                 session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000 + port, 80, "TCP", 100, "S")
 
-            calls = []
-            session.stop(progress_callback=lambda done, total: calls.append((done, total)))
+            session.stop()
+            assert session.flush_total == 3
 
-            assert calls == [(1, 3), (2, 3), (3, 3)]
+            _wait_for_flush(session)
+            assert session.flush_done == 3
+            assert session.flush_running is False
         finally:
             if session.running:
                 session.stop()
+            _wait_for_flush(session)
 
 
 # ===========================================================================
@@ -311,6 +355,7 @@ class TestResultsAccumulation:
         try:
             session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000, 80, "TCP", 100, "S")
             session.stop()
+            _wait_for_flush(session)
 
             assert len(session.results) == 1
             entry = session.results[0]
@@ -321,6 +366,7 @@ class TestResultsAccumulation:
         finally:
             if session.running:
                 session.stop()
+            _wait_for_flush(session)
 
     @patch("sniffer.live_session.PacketSniffer")
     def test_result_entry_carries_id_and_features_for_report_and_feedback(self, mock_sniffer_cls, temp_db):
@@ -334,6 +380,7 @@ class TestResultsAccumulation:
         try:
             session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000, 80, "TCP", 100, "S")
             session.stop()
+            _wait_for_flush(session)
 
             entry = session.results[0]
             assert isinstance(entry["id"], int)
@@ -349,6 +396,7 @@ class TestResultsAccumulation:
         finally:
             if session.running:
                 session.stop()
+            _wait_for_flush(session)
 
     @patch("sniffer.live_session.PacketSniffer")
     def test_failed_classification_is_not_recorded_in_results(self, mock_sniffer_cls, temp_db):
@@ -361,9 +409,11 @@ class TestResultsAccumulation:
         try:
             session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000, 80, "TCP", 100, "S")
             session.stop()
+            _wait_for_flush(session)
 
             assert session.results == []
             assert session.last_error is not None
         finally:
             if session.running:
                 session.stop()
+            _wait_for_flush(session)

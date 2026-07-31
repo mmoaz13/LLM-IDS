@@ -165,7 +165,16 @@ with TAB_CAPTURE:
     session = st.session_state.get("capture_session")
     st.session_state.setdefault("capture_results", [])
 
-    if session is None or not session.running:
+    # Once the sniffer is stopped AND any background flush of leftover
+    # in-progress flows has finished, fold the session's results into the
+    # frozen snapshot and drop the session object — there's nothing left
+    # for it to do.
+    if session is not None and not session.running and not session.flush_running:
+        st.session_state["capture_results"] = list(session.results)
+        st.session_state["capture_session"] = None
+        session = None
+
+    if session is None:
         interfaces = list_interfaces()
         if not interfaces:
             st.error("No network interfaces detected.")
@@ -191,7 +200,7 @@ with TAB_CAPTURE:
                         "This usually means the process wasn't launched with admin/root "
                         "privileges, or (Windows) Npcap isn't installed."
                     )
-    else:
+    elif session.running:
         st.success(f"Capturing on **{session.interface_label}**")
 
         col1, col2, col3, col4 = st.columns(4)
@@ -215,19 +224,21 @@ with TAB_CAPTURE:
                 st.rerun()
         with col_stop:
             if st.button("Stop Capture", key="stop_capture_btn"):
-                stop_progress = st.empty()
-
-                def _on_stop_progress(done, total, _bar=stop_progress):
-                    _bar.progress(
-                        done / total,
-                        text=f"Classifying flows still in progress… {done}/{total}",
-                    )
-
-                with st.spinner("Stopping capture…"):
-                    session.stop(progress_callback=_on_stop_progress)
-                st.session_state["capture_results"] = list(session.results)
-                st.session_state["capture_session"] = None
+                session.stop()  # returns immediately — any leftover flows finish in the background
                 st.rerun()
+    else:
+        # Sniffer has stopped but flows that were still active at that
+        # moment are being classified in a background thread — stop()
+        # never blocks on this, no matter how many flows or how slow the
+        # LLM is, so this can take a while to actually finish.
+        st.info(
+            f"Capture stopped. Finishing classification of flows still in progress "
+            f"when you stopped… {session.flush_done}/{session.flush_total}"
+        )
+        if session.last_error:
+            st.warning(f"Last error in the background classify loop: {session.last_error}")
+        if st.button("Refresh status", key="refresh_flush_btn"):
+            st.rerun()
 
     st.divider()
     st.subheader("Captured flows")
@@ -237,7 +248,7 @@ with TAB_CAPTURE:
         "separately."
     )
 
-    live_results = session.results if (session is not None and session.running) else st.session_state["capture_results"]
+    live_results = session.results if session is not None else st.session_state["capture_results"]
 
     if not live_results:
         st.info("No flows captured yet in this session. Start a capture above to see results here.")

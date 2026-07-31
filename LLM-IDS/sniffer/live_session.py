@@ -32,9 +32,12 @@ class LiveCaptureSession:
 
         self._stop_event = threading.Event()
         self._worker_thread = None
+        self._flush_thread = None
         self.started_at = None
         self.flows_classified = 0
         self.last_error = None
+        self.flush_total = 0
+        self.flush_done = 0
         # Every flow this session has classified, in order — the dashboard
         # shows this directly rather than reading the (globally-persistent,
         # cross-session) database, so the table only ever reflects what this
@@ -44,6 +47,13 @@ class LiveCaptureSession:
     @property
     def running(self) -> bool:
         return self._worker_thread is not None and self._worker_thread.is_alive()
+
+    @property
+    def flush_running(self) -> bool:
+        """True while flows that were still active at stop() are being
+        classified in the background. Poll this (and flush_done/flush_total)
+        to show progress — stop() itself never waits on this."""
+        return self._flush_thread is not None and self._flush_thread.is_alive()
 
     @property
     def packets_seen(self) -> int:
@@ -65,16 +75,18 @@ class LiveCaptureSession:
         self._worker_thread = threading.Thread(target=self._classify_loop, daemon=True)
         self._worker_thread.start()
 
-    def stop(self, progress_callback=None):
-        """Stops the sniffer and the background loop, then classifies
-        whatever flows were still in progress (not yet closed or timed out)
-        rather than discarding them. Without this, stopping shortly after
-        starting would silently drop most of what was just captured — the
-        same issue pcap_reader.py had before it gained pop_all_flows().
-
-        progress_callback(done, total), if given, is called once per
-        flushed flow so the caller can show progress for what may be a
-        slow step (each flow is a real LLM call).
+    def stop(self):
+        """Stops the sniffer and the background classify loop immediately,
+        then hands off whatever flows were still in progress (not yet
+        closed or timed out) to a separate background thread for
+        classification, rather than either discarding them or blocking this
+        call on however many there are. Without keeping them at all,
+        stopping shortly after starting would silently drop most of what
+        was just captured — the same issue pcap_reader.py had before it
+        gained pop_all_flows(). But classifying dozens of flows is dozens of
+        real LLM calls, and this call needs to return immediately regardless
+        — so that work happens in the background instead. Poll
+        flush_running / flush_done / flush_total for progress.
         """
         self._stop_event.set()
         self.sniffer.stop_async()
@@ -83,10 +95,18 @@ class LiveCaptureSession:
         self._worker_thread = None
 
         remaining = self.tracker.pop_all_flows()
-        for i, flow in enumerate(remaining, start=1):
+        if remaining:
+            self.flush_total = len(remaining)
+            self.flush_done = 0
+            self._flush_thread = threading.Thread(
+                target=self._flush_remaining, args=(remaining,), daemon=True
+            )
+            self._flush_thread.start()
+
+    def _flush_remaining(self, flows):
+        for flow in flows:
             self._classify_and_record(flow)
-            if progress_callback:
-                progress_callback(i, len(remaining))
+            self.flush_done += 1
 
     def _classify_loop(self):
         # wait() returns as soon as _stop_event is set, unlike sleep() —
