@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -m pytest tests/test_extractor.py tests/test_llm_client.py tests/test_db.py -v)",
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -m pytest tests/ -v)"
+    ]
+  }
+}
