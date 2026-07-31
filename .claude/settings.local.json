@@ -28,7 +28,9 @@
       "Bash(curl -s -o /dev/null https://www.wikipedia.org --max-time 5)",
       "PowerShell(Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object Name, InterfaceDescription, Status | Format-Table -AutoSize)",
       "Bash(curl -s -o /dev/null https://www.example.com --max-time 5)",
-      "Bash(curl -s -o /dev/null https://www.python.org --max-time 5)"
+      "Bash(curl -s -o /dev/null https://www.python.org --max-time 5)",
+      "Bash(./venv/Scripts/streamlit.exe run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8503 --max-time 5)"
     ]
   }
 }

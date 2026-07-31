@@ -20,7 +20,7 @@ without touching any detection logic.
 
 ## Dashboard features
 
-The dashboard (`streamlit run dashboard/app.py`) has five tabs:
+The dashboard (`streamlit run dashboard/app.py`) has four tabs:
 
 - **Live Capture** — pick a network adapter from a dropdown and start/stop
   capture right from the browser, instead of running `main.py` as a
@@ -33,8 +33,10 @@ The dashboard (`streamlit run dashboard/app.py`) has five tabs:
   nothing. `main.py` still exists and works exactly as before for anyone who
   prefers the two-process setup (capture process needs admin, dashboard
   process doesn't).
-- **Live Monitor** — real-time results written by `main.py` *or* Live
-  Capture, with a **Flow tools** panel below the table:
+
+  Below the capture controls, the same tab shows the real-time results
+  table for whatever `main.py` or the capture above has written, with a
+  **Flow tools** panel underneath:
   - *Search* — find a specific flow by ID, IP, or port. Queries
     `storage/flows.db` directly (not just whatever the "Rows to show" slider
     currently has loaded), so it scales to however many flows are stored.
@@ -227,7 +229,7 @@ llm-ids/
 ├── storage/
 │   └── db.py                  # SQLite results + feedback store
 ├── dashboard/
-│   └── app.py                 # Streamlit viewer (Live Capture / Live Monitor / Upload / Simulate / Ask)
+│   └── app.py                 # Streamlit viewer (Live Capture+Monitor / Upload / Simulate / Ask)
 └── tests/
     ├── test_flow_tracker.py
     ├── test_pcap_reader.py

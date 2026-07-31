@@ -1,9 +1,9 @@
-"""Streamlit dashboard — five tabs:
-  • Live Capture      : pick a network adapter and start/stop capture, run
-                        entirely inside this process (needs admin/root)
-  • Live Monitor      : reads results written by main.py (or Live Capture)
-                        in real time, plus per-flow incident reports and
-                        analyst feedback
+"""Streamlit dashboard — four tabs:
+  • Live Capture      : pick a network adapter and start/stop capture (runs
+                        entirely inside this process, needs admin/root),
+                        plus the real-time results table for whatever
+                        main.py or this capture has written, with per-flow
+                        search, incident reports, and analyst feedback
   • Upload PCAP       : upload a .pcap file, analyze it on the spot, show results
   • Simulate Attacks  : generate synthetic traffic on the fly and analyze it
   • Ask               : ask a natural-language question over stored results
@@ -72,8 +72,8 @@ st.markdown(
 db.init_db()
 llm = LLMClient()
 
-TAB_CAPTURE, TAB_LIVE, TAB_UPLOAD, TAB_SIMULATE, TAB_ASK = st.tabs(
-    ["Live Capture", "Live Monitor", "Upload PCAP", "Simulate Attacks", "Ask"]
+TAB_CAPTURE, TAB_UPLOAD, TAB_SIMULATE, TAB_ASK = st.tabs(
+    ["Live Capture", "Upload PCAP", "Simulate Attacks", "Ask"]
 )
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -201,7 +201,8 @@ with TAB_CAPTURE:
 
         st.caption(
             "Capture keeps running in the background even if you switch tabs or navigate "
-            "away — click Stop Capture to end it. Classified flows appear in Live Monitor."
+            "away — click Stop Capture to end it. Classified flows appear in the results "
+            "below."
         )
 
         col_refresh, col_stop = st.columns(2)
@@ -214,16 +215,15 @@ with TAB_CAPTURE:
                 st.session_state["capture_session"] = None
                 st.rerun()
 
-
-# ── Tab 2: Live Monitor ───────────────────────────────────────────────────────
-
-with TAB_LIVE:
-    st.subheader("Real-time flow analysis from network interfaces")
-    st.caption("Results are written here by `main.py`. Click Refresh to pull the latest.")
+    st.divider()
+    st.subheader("Real-time flow analysis")
+    st.caption(
+        "Results written by `main.py` or the capture above. Click Refresh to pull the latest."
+    )
 
     col_refresh, col_limit = st.columns([1, 3])
     with col_refresh:
-        if st.button("Refresh"):
+        if st.button("Refresh", key="refresh_results_btn"):
             st.rerun()
     with col_limit:
         limit = st.slider("Rows to show", 10, 500, 100, key="live_limit")
@@ -326,7 +326,7 @@ with TAB_LIVE:
                     )
 
 
-# ── Tab 3: Upload PCAP ────────────────────────────────────────────────────────
+# ── Tab 2: Upload PCAP ────────────────────────────────────────────────────────
 
 with TAB_UPLOAD:
     st.subheader("Analyze a .pcap / .pcapng capture file")
@@ -437,7 +437,7 @@ with TAB_UPLOAD:
             )
 
 
-# ── Tab 4: Simulate Attacks ────────────────────────────────────────────────────
+# ── Tab 3: Simulate Attacks ────────────────────────────────────────────────────
 
 with TAB_SIMULATE:
     st.subheader("Generate synthetic traffic and analyze it instantly")
@@ -492,7 +492,7 @@ with TAB_SIMULATE:
                         st.dataframe(grouped, use_container_width=True)
 
 
-# ── Tab 5: Ask ─────────────────────────────────────────────────────────────────
+# ── Tab 4: Ask ─────────────────────────────────────────────────────────────────
 
 with TAB_ASK:
     st.subheader("Ask a question about your flow history")
