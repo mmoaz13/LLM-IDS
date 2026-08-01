@@ -44,6 +44,18 @@ class PacketSniffer:
         self.interface = interface
         self.packet_count = 0
         self._async_sniffer = None
+        self._last_sniff_error = None
+
+    @property
+    def sniff_error(self):
+        """The exception that killed the background sniff thread, if any —
+        e.g. the adapter was unplugged mid-capture. Live while capturing
+        (callers can poll this during capture, not just after stopping),
+        and still readable afterward even though stop_async() discards the
+        underlying AsyncSniffer object."""
+        if self._async_sniffer is not None and self._async_sniffer.exception is not None:
+            self._last_sniff_error = self._async_sniffer.exception
+        return self._last_sniff_error
 
     def _handle_packet(self, packet):
         self.packet_count += 1
@@ -109,9 +121,15 @@ class PacketSniffer:
     def stop_async(self):
         if self._async_sniffer is None:
             return
+        _ = self.sniff_error  # snapshot into _last_sniff_error before it's discarded
         try:
             if self._async_sniffer.running:
                 self._async_sniffer.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            # stop() itself re-raises a stored sniff-thread exception in
+            # some cases — don't let that escape stop_async() (callers
+            # expect stopping to always succeed), but don't discard it
+            # either, unlike before.
+            self._last_sniff_error = self._last_sniff_error or exc
+        _ = self.sniff_error  # stop() may have surfaced a new one too
         self._async_sniffer = None

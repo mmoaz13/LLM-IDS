@@ -11,12 +11,16 @@ Coverage areas
   4. Classify loop integration      (a real flow, popped and saved for real,
                                      using the real FlowTracker + a throwaway DB)
   5. Fail-safe on a bad flow        (one exception doesn't kill the loop)
+  5b. Sniff-thread failures         (a mid-capture adapter failure is
+                                     surfaced via last_error, not swallowed)
   6. Fast stop                      (stop() doesn't block for a full
                                      expiry_check_interval)
   7. Flush on stop                  (in-progress flows are classified when
                                      capture stops, not silently dropped)
   8. session.results                (in-memory, session-scoped result list
                                      the dashboard reads instead of the DB)
+  9. results_snapshot()             (safe copy for concurrent UI-thread
+                                     reads while a background thread appends)
 
 PacketSniffer itself is mocked (via sniffer.live_session.PacketSniffer) so
 no real capture/privileges are involved — but the FlowTracker and database
@@ -28,6 +32,7 @@ Run
 """
 
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -211,6 +216,64 @@ class TestFailSafeOnBadFlow:
             while session.flows_classified == 0 and time.time() < deadline:
                 time.sleep(0.05)
             assert session.flows_classified == 1
+        finally:
+            session.stop()
+
+
+# ===========================================================================
+# 5b. Sniff-thread failures are surfaced (regression test: a mid-capture
+#     adapter failure used to be silently swallowed)
+# ===========================================================================
+
+class TestSniffErrorSurfacing:
+
+    @patch("sniffer.live_session.PacketSniffer")
+    def test_sniff_error_is_surfaced_as_last_error(self, mock_sniffer_cls, temp_db):
+        mock_sniffer = mock_sniffer_cls.return_value
+        mock_sniffer.start_async.return_value = None
+        mock_sniffer.sniff_error = None  # nothing wrong yet
+
+        session = _make_session(expiry_check_interval=0.05)
+        session.start()
+        try:
+            assert session.last_error is None
+
+            # Simulate the adapter dying mid-capture.
+            mock_sniffer.sniff_error = OSError("adapter disconnected")
+
+            deadline = time.time() + 2
+            while session.last_error is None and time.time() < deadline:
+                time.sleep(0.02)
+
+            assert session.last_error is not None
+            assert "adapter disconnected" in session.last_error
+        finally:
+            session.stop()
+
+    @patch("sniffer.live_session.PacketSniffer")
+    def test_a_real_classification_error_is_not_overwritten_by_a_stale_check(self, mock_sniffer_cls, temp_db):
+        """Once last_error is set (by either cause), the loop's sniff_error
+        check must not keep clobbering it — the first recorded error is
+        what matters, not whichever one happened to be checked most
+        recently."""
+        mock_sniffer = mock_sniffer_cls.return_value
+        mock_sniffer.start_async.return_value = None
+        mock_sniffer.sniff_error = None
+
+        llm = FakeLLM(fail_on_call=1)
+        session = _make_session(llm_client=llm, expiry_check_interval=0.05)
+        session.start()
+        try:
+            session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000, 80, "TCP", 100, "FA")
+            deadline = time.time() + 2
+            while session.last_error is None and time.time() < deadline:
+                time.sleep(0.02)
+            first_error = session.last_error
+            assert first_error is not None
+
+            mock_sniffer.sniff_error = OSError("a different failure")
+            time.sleep(0.2)  # let a few more loop iterations pass
+            assert session.last_error == first_error
         finally:
             session.stop()
 
@@ -416,4 +479,87 @@ class TestResultsAccumulation:
         finally:
             if session.running:
                 session.stop()
+
+
+# ===========================================================================
+# 9. results_snapshot() (safe concurrent read while the classify loop or
+#    flush thread may be appending)
+# ===========================================================================
+
+class TestResultsSnapshot:
+
+    @patch("sniffer.live_session.PacketSniffer")
+    def test_snapshot_of_empty_session_is_empty_list(self, mock_sniffer_cls, temp_db):
+        session = _make_session()
+        assert session.results_snapshot() == []
+
+    @patch("sniffer.live_session.PacketSniffer")
+    def test_snapshot_reflects_classified_flows(self, mock_sniffer_cls, temp_db):
+        session = _make_session(expiry_check_interval=10, flow_timeout_seconds=600)
+        session.start()
+        try:
+            session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000, 80, "TCP", 100, "S")
+            session.stop()
+            _wait_for_flush(session)
+
+            snapshot = session.results_snapshot()
+            assert len(snapshot) == 1
+            assert snapshot[0]["flow_id"] == "10.0.0.1:5000->10.0.0.2:80/TCP"
+        finally:
+            if session.running:
+                session.stop()
+            _wait_for_flush(session)
+
+    @patch("sniffer.live_session.PacketSniffer")
+    def test_snapshot_is_a_copy_not_a_live_reference(self, mock_sniffer_cls, temp_db):
+        """Mutating the returned list must not affect the session's own
+        internal results list — callers (the dashboard) shouldn't be able
+        to corrupt session state just by touching what they were handed."""
+        session = _make_session(expiry_check_interval=10, flow_timeout_seconds=600)
+        session.start()
+        try:
+            session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000, 80, "TCP", 100, "S")
+            session.stop()
+            _wait_for_flush(session)
+
+            snapshot = session.results_snapshot()
+            snapshot.append({"flow_id": "fabricated", "classification": "Attack"})
+
+            assert len(session.results) == 1
+            assert len(session.results_snapshot()) == 1
+        finally:
+            if session.running:
+                session.stop()
+            _wait_for_flush(session)
+
+    @patch("sniffer.live_session.PacketSniffer")
+    def test_snapshot_taken_concurrently_with_appends_does_not_raise(self, mock_sniffer_cls, temp_db):
+        """The regression this guards against: reading self.results while a
+        background thread appends to it. Fires many classifications back to
+        back and repeatedly snapshots from the 'UI thread' at the same
+        time — must never raise, regardless of interleaving."""
+        session = _make_session(expiry_check_interval=0.01, flow_timeout_seconds=600)
+        session.start()
+        try:
+            for port in range(30):
+                session.tracker.add_packet("10.0.0.1", "10.0.0.2", 5000 + port, 80, "TCP", 100, "FA")
+
+            errors = []
+
+            def _poll_snapshots():
+                deadline = time.time() + 1
+                while time.time() < deadline:
+                    try:
+                        session.results_snapshot()
+                    except Exception as exc:
+                        errors.append(exc)
+
+            poller = threading.Thread(target=_poll_snapshots)
+            poller.start()
+            poller.join()
+
+            assert errors == []
+        finally:
+            session.stop()
+            _wait_for_flush(session)
             _wait_for_flush(session)

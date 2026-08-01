@@ -170,7 +170,7 @@ with TAB_CAPTURE:
     # frozen snapshot and drop the session object — there's nothing left
     # for it to do.
     if session is not None and not session.running and not session.flush_running:
-        st.session_state["capture_results"] = list(session.results)
+        st.session_state["capture_results"] = session.results_snapshot()
         st.session_state["capture_session"] = None
         session = None
 
@@ -248,7 +248,7 @@ with TAB_CAPTURE:
         "separately."
     )
 
-    live_results = session.results if session is not None else st.session_state["capture_results"]
+    live_results = session.results_snapshot() if session is not None else st.session_state["capture_results"]
 
     if not live_results:
         st.info("No flows captured yet in this session. Start a capture above to see results here.")
@@ -311,11 +311,18 @@ with TAB_CAPTURE:
             if st.button("Generate report", key="gen_report_btn"):
                 with st.spinner("Writing report…"):
                     st.session_state["last_report"] = generate_report(selected_row, llm)
-                    st.session_state["last_report_flow"] = selected_row["flow_id"]
+                    st.session_state["last_report_id"] = selected_row["id"]
 
-            if st.session_state.get("last_report"):
+            # Only show a report if it's actually for the flow currently
+            # selected — otherwise switching the dropdown after generating
+            # one leaves the old report on screen looking like it's for the
+            # new selection.
+            if (
+                st.session_state.get("last_report")
+                and st.session_state.get("last_report_id") == selected_row["id"]
+            ):
                 st.markdown(st.session_state["last_report"])
-                safe_name = st.session_state.get("last_report_flow", "flow").replace(":", "_").replace("/", "_")
+                safe_name = selected_row["flow_id"].replace(":", "_").replace("/", "_")
                 st.download_button(
                     "Download report (.md)",
                     data=st.session_state["last_report"],
@@ -325,12 +332,16 @@ with TAB_CAPTURE:
 
         with col_feedback:
             st.markdown("**Analyst feedback**")
+            # Keyed by flow id so switching the selected flow resets these
+            # widgets to their defaults, instead of carrying over a
+            # half-filled-out choice/note that would otherwise get
+            # submitted against the wrong flow.
             feedback_choice = st.radio(
                 "Was this verdict correct?",
                 list(FEEDBACK_LABELS.keys()),
-                key="feedback_choice",
+                key=f"feedback_choice_{selected_row['id']}",
             )
-            note = st.text_input("Note (optional)", key="feedback_note")
+            note = st.text_input("Note (optional)", key=f"feedback_note_{selected_row['id']}")
             if st.button("Submit feedback", key="submit_feedback_btn"):
                 db.save_feedback(
                     selected_row["id"], selected_row["classification"],
@@ -480,8 +491,12 @@ with TAB_SIMULATE:
                 run_clicked = st.button("Generate & Analyze", key=f"sim_run_{key}", use_container_width=True)
 
             if run_clicked:
-                with st.spinner(f"Classifying {scenario['label']} traffic…"):
-                    packet_count, sim_results, summary = _run_scenario_and_collect(scenario)
+                try:
+                    with st.spinner(f"Classifying {scenario['label']} traffic…"):
+                        packet_count, sim_results, summary = _run_scenario_and_collect(scenario)
+                except Exception as exc:
+                    st.error(f"Failed to generate/analyze {scenario['label']} traffic: {exc}")
+                    st.stop()
 
                 st.success(f"{packet_count} synthetic packets → {summary['total_flows']} flows classified.")
 

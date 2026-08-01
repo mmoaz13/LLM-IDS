@@ -197,7 +197,7 @@ pytest tests/test_flow_tracker.py -v
 pytest tests\test_flow_tracker.py -v
 ```
 
-Expected output: **188 passed**.
+Expected output: **227 passed**.
 
 ---
 
@@ -240,6 +240,7 @@ llm-ids/
     ├── test_query_parser.py
     ├── test_report_generator.py
     ├── test_traffic_generator.py
+    ├── test_main.py
     └── test_db.py
 ```
 
@@ -289,3 +290,19 @@ llm-ids/
   function-local variable, which would be recreated (and the old session
   orphaned, still running) on every rerun. It's still a daemon thread with
   no automatic cleanup on tab close — click Stop Capture when done.
+- **A dropped adapter is a visible error, not a silent stall** — if capture
+  starts fine but the interface fails mid-capture (unplugged, driver crash),
+  `PacketSniffer.sniff_error` surfaces the underlying exception instead of
+  discarding it, and `LiveCaptureSession` polls it into `last_error` (already
+  shown in the UI) so "Packets seen" quietly flatlining comes with an actual
+  explanation.
+- **`main.py` flushes on Ctrl+C too** — the same fail-safe reasoning as
+  `pop_all_flows()`: interrupting the CLI pipeline means no more packets are
+  ever coming, so whatever flows are still active at that moment get
+  classified before exit instead of being silently dropped.
+- **WAL mode is on by default** — this project routinely has several writers
+  against `storage/flows.db` at once (main.py, Live Capture's classify loop,
+  its background flush thread, Simulate Attacks), plus the dashboard reading
+  concurrently. `PRAGMA journal_mode=WAL` (set once, in `init_db()`) lets
+  readers and writers proceed without blocking each other on every
+  statement, which the default rollback-journal mode doesn't.

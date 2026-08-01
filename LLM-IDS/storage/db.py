@@ -55,6 +55,15 @@ def _connect():
 
 def init_db():
     with _connect() as conn:
+        # WAL lets readers (the dashboard) and writers (main.py, Live
+        # Capture's classify loop, its flush thread) proceed without
+        # blocking each other on every single statement — with the default
+        # rollback-journal mode, a writer holds an exclusive lock for the
+        # duration of its transaction, and this project routinely has
+        # several writers active against the same file at once. Persists
+        # in the database file itself, so this is a one-time, idempotent
+        # setting, cheap to re-request on every init_db() call.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(SCHEMA)
         conn.execute(FEEDBACK_SCHEMA)
         conn.commit()

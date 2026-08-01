@@ -18,6 +18,13 @@ from sniffer.flow_tracker import FlowTracker
 from storage import db
 
 
+def _classify_and_save(flow, llm):
+    features = compute_features(flow)
+    verdict = llm.classify(features)
+    db.save_result(features, verdict)
+    print(f"[{verdict['classification']:>10}] {features['flow_id']} — {verdict['explanation']}")
+
+
 def main():
     db.init_db()
     tracker = FlowTracker(timeout_seconds=config.FLOW_TIMEOUT_SECONDS)
@@ -34,12 +41,19 @@ def main():
         while True:
             time.sleep(config.EXPIRY_CHECK_INTERVAL)
             for flow in tracker.pop_finished_flows():
-                features = compute_features(flow)
-                verdict = llm.classify(features)
-                db.save_result(features, verdict)
-                print(f"[{verdict['classification']:>10}] {features['flow_id']} — {verdict['explanation']}")
+                _classify_and_save(flow, llm)
     except KeyboardInterrupt:
-        print("\nStopping.")
+        # Flows still in progress (not yet closed or timed out) would
+        # otherwise be silently dropped here — Ctrl+C means no more packets
+        # are ever coming, so there's no "later" to wait for them to finish
+        # naturally. Same fix as pcap_reader.py's pop_all_flows().
+        remaining = tracker.pop_all_flows()
+        if remaining:
+            print(f"\nStopping. Classifying {len(remaining)} flow(s) still in progress...")
+            for flow in remaining:
+                _classify_and_save(flow, llm)
+        else:
+            print("\nStopping.")
 
 
 if __name__ == "__main__":

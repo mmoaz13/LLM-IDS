@@ -91,6 +91,15 @@ class TestSchemaSetup:
         results = db.get_recent_results()
         assert len(results) == 1
 
+    def test_wal_mode_is_enabled(self, temp_db):
+        """This project routinely has several writers active against the
+        same file at once (main.py, Live Capture's classify loop, its
+        flush thread, Simulate Attacks) plus the dashboard reading —
+        WAL mode is what keeps those from blocking each other."""
+        with sqlite3.connect(str(temp_db)) as conn:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal"
+
 
 # ===========================================================================
 # 2. Save / read round trip

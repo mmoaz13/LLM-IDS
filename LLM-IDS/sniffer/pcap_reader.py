@@ -21,7 +21,7 @@ def _tcp_flags_str(tcp_layer) -> str:
 
 def process_pcap(
     file_bytes: bytes,
-    on_flow_ready: Callable[[dict, dict], None],
+    on_flow_ready: Callable[[dict], None],
     timeout_seconds: float = 15,
     progress_callback: Callable[[int, int], None] = None,
 ) -> dict:

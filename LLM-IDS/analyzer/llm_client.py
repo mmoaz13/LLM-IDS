@@ -82,8 +82,14 @@ class LLMClient:
         """For free-form prose (e.g. incident reports, NL answers). Fails
         safe to `fallback` (or a generic error string) rather than raising,
         so a broken LLM call degrades a report instead of crashing the
-        dashboard."""
+        dashboard.
+
+        _call() always parses the outer Ollama envelope with response.json()
+        even in text mode, so a malformed HTTP body can raise a JSON decode
+        error here too, not just a transport error — catch the same set
+        classify()/generate_json() do, or that case would crash the caller
+        instead of degrading."""
         try:
             return self._call(prompt, json_format=False).strip()
-        except requests.RequestException as exc:
+        except (requests.RequestException, json.JSONDecodeError, ValueError) as exc:
             return fallback or f"LLM call failed: {exc}"

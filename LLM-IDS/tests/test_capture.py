@@ -11,6 +11,8 @@ Coverage areas
   4. start_async() failure path  (socket-open exception -> raised to caller,
                                    nothing left half-started)
   5. stop_async()
+  6. sniff_error                 (mid-capture failures are surfaced, not
+                                   silently swallowed)
 
 AsyncSniffer itself is mocked throughout — these tests don't touch a real
 network interface or require any privileges.
@@ -202,3 +204,70 @@ class TestStopAsync:
         sniffer.stop_async()
         assert underlying.running is False
         assert sniffer._async_sniffer is None
+
+
+# ===========================================================================
+# 6. sniff_error (regression test: a mid-capture failure must be surfaced,
+#    not silently swallowed)
+# ===========================================================================
+
+class TestSniffError:
+
+    @patch("sniffer.capture.AsyncSniffer")
+    def test_sniff_error_is_none_before_any_failure(self, mock_cls):
+        mock_cls.side_effect = lambda **kwargs: FakeAsyncSniffer(outcome="success", **kwargs)
+        tracker = FlowTracker(timeout_seconds=60)
+        sniffer = PacketSniffer(tracker, interface="eth0")
+        sniffer.start_async(ready_timeout=1)
+        assert sniffer.sniff_error is None
+
+    @patch("sniffer.capture.AsyncSniffer")
+    def test_sniff_error_is_visible_live_during_capture(self, mock_cls):
+        """A mid-capture failure (e.g. adapter unplugged) sets .exception on
+        the underlying sniffer asynchronously, without anyone calling
+        stop_async() — sniff_error must reflect that immediately, not only
+        after stopping."""
+        mock_cls.side_effect = lambda **kwargs: FakeAsyncSniffer(outcome="success", **kwargs)
+        tracker = FlowTracker(timeout_seconds=60)
+        sniffer = PacketSniffer(tracker, interface="eth0")
+        sniffer.start_async(ready_timeout=1)
+
+        sniffer._async_sniffer.exception = OSError("adapter disconnected")
+        assert isinstance(sniffer.sniff_error, OSError)
+
+    @patch("sniffer.capture.AsyncSniffer")
+    def test_sniff_error_survives_after_stop_async_discards_the_sniffer(self, mock_cls):
+        mock_cls.side_effect = lambda **kwargs: FakeAsyncSniffer(outcome="success", **kwargs)
+        tracker = FlowTracker(timeout_seconds=60)
+        sniffer = PacketSniffer(tracker, interface="eth0")
+        sniffer.start_async(ready_timeout=1)
+        sniffer._async_sniffer.exception = OSError("adapter disconnected")
+
+        sniffer.stop_async()
+
+        assert sniffer._async_sniffer is None
+        assert isinstance(sniffer.sniff_error, OSError)
+
+    @patch("sniffer.capture.AsyncSniffer")
+    def test_exception_raised_by_stop_itself_is_captured_not_propagated(self, mock_cls):
+        """Real AsyncSniffer.stop() re-raises a stored sniff-thread exception
+        in some cases — stop_async() must capture that rather than letting
+        it propagate (callers rely on stop_async() never raising)."""
+        fake = FakeAsyncSniffer(outcome="success")
+
+        def _factory(**kwargs):
+            fake._started_callback = kwargs.get("started_callback")
+            return fake
+        mock_cls.side_effect = _factory
+
+        tracker = FlowTracker(timeout_seconds=60)
+        sniffer = PacketSniffer(tracker, interface="eth0")
+        sniffer.start_async(ready_timeout=1)
+
+        def _raising_stop():
+            raise RuntimeError("boom from stop()")
+        fake.stop = _raising_stop
+
+        sniffer.stop_async()  # must not raise
+
+        assert isinstance(sniffer.sniff_error, RuntimeError)

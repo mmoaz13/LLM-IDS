@@ -307,6 +307,23 @@ class TestGenerateText:
         result = client.generate_text("write something")
         assert isinstance(result, str)
 
+    @patch("analyzer.llm_client.requests.post")
+    def test_malformed_json_envelope_fails_safe_instead_of_raising(self, mock_post):
+        """_call() always parses the outer Ollama envelope with
+        response.json(), even in text mode — a malformed HTTP body must
+        fail safe here too, the same as it does for classify()/
+        generate_json(), instead of propagating an uncaught exception that
+        would crash the caller (e.g. the dashboard's report generator)."""
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.raise_for_status.return_value = None
+        resp.json.side_effect = ValueError("Expecting value: line 1 column 1 (char 0)")
+        mock_post.return_value = resp
+
+        client = LLMClient()
+        result = client.generate_text("write something", fallback="fallback text")
+        assert result == "fallback text"
+
 
 # ===========================================================================
 # 8. generate_json (structured-but-not-classification uses, e.g. NL query parsing)

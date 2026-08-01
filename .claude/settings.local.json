@@ -46,7 +46,16 @@
       "Bash(./venv/Scripts/python.exe -m pytest tests/test_query_parser.py -v)",
       "Bash(./venv/Scripts/python.exe -m pytest tests/test_query_parser.py -q)",
       "Bash(./venv/Scripts/python.exe -m py_compile dashboard/app.py analyzer/query_parser.py)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8510 --max-time 5)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8510 --max-time 5)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_capture.py tests/test_live_session.py -q)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_live_session.py -v -k \"SniffError\")",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_live_session.py -q)",
+      "Bash(./venv/Scripts/python.exe -m py_compile main.py)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_main.py -v)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_db.py -v)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_db.py -v -k \"wal_mode\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8511 --max-time 5)",
+      "Bash(curl -s -o /dev/null https://www.github.com --max-time 5)"
     ]
   }
 }

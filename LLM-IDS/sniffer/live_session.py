@@ -41,7 +41,11 @@ class LiveCaptureSession:
         # Every flow this session has classified, in order — the dashboard
         # shows this directly rather than reading the (globally-persistent,
         # cross-session) database, so the table only ever reflects what this
-        # capture actually saw.
+        # capture actually saw. Mutated from background threads (classify
+        # loop, flush) and read/copied from the Streamlit UI thread —
+        # _results_lock keeps that consistent, the same way FlowTracker
+        # locks its own shared dict.
+        self._results_lock = threading.Lock()
         self.results = []
 
     @property
@@ -62,6 +66,12 @@ class LiveCaptureSession:
     @property
     def active_flow_count(self) -> int:
         return self.tracker.active_flow_count()
+
+    def results_snapshot(self) -> list:
+        """A point-in-time copy of self.results, safe to read while the
+        classify loop or flush thread may be concurrently appending to it."""
+        with self._results_lock:
+            return list(self.results)
 
     def start(self):
         """Starts the sniffer and the classify/save loop. Raises if the
@@ -115,13 +125,19 @@ class LiveCaptureSession:
         while not self._stop_event.wait(timeout=self.expiry_check_interval):
             for flow in self.tracker.pop_finished_flows():
                 self._classify_and_record(flow)
+            # A sniff failure (e.g. the adapter was unplugged) used to be
+            # silently swallowed — packets_seen would just stop climbing
+            # with no explanation. Surface it the same way a classification
+            # failure already is.
+            if self.sniffer.sniff_error is not None and self.last_error is None:
+                self.last_error = f"Packet capture stopped unexpectedly: {self.sniffer.sniff_error}"
 
     def _classify_and_record(self, flow):
         try:
             features = compute_features(flow)
             verdict = self.llm.classify(features)
             row_id = db.save_result(features, verdict)
-            self.results.append({
+            entry = {
                 # Mirrors the shape of a storage.db row (id + features_json)
                 # so report_generator / save_feedback can use this entry
                 # directly — the dashboard never has to fall back to a
@@ -132,7 +148,9 @@ class LiveCaptureSession:
                 "confidence": round(verdict["confidence"], 2),
                 "explanation": verdict["explanation"],
                 "features_json": features,
-            })
+            }
+            with self._results_lock:
+                self.results.append(entry)
             self.flows_classified += 1
         except Exception as exc:
             # Keep the loop alive on a single bad flow — an IDS that
