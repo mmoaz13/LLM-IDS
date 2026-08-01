@@ -26,7 +26,7 @@ from sniffer.live_session import LiveCaptureSession
 from sniffer.pcap_reader import process_pcap
 from analyzer.llm_client import LLMClient
 from analyzer.report_generator import generate as generate_report
-from analyzer.query_parser import parse as parse_query, summarize as summarize_query
+from analyzer.query_parser import interpret as interpret_query, summarize as summarize_query
 from simulator.traffic_generator import SCENARIOS, packets_to_pcap_bytes
 from storage.db import save_result
 
@@ -532,20 +532,27 @@ with TAB_ASK:
 
     if asked and question.strip():
         with st.spinner("Interpreting question…"):
-            filters = parse_query(question, llm)
+            filters, is_flow_question = interpret_query(question, llm)
 
-        query_limit = filters.get("limit", 50)
-        ask_results = db.query_results(filters, limit=query_limit)
+        if not is_flow_question:
+            st.markdown(
+                "**Answer:** I can only answer questions about your captured network "
+                "flows — try asking about a classification, IP, port, protocol, or "
+                "time range (e.g. *\"attack flows on port 22 in the last hour\"*)."
+            )
+        else:
+            query_limit = filters.get("limit", 50)
+            ask_results = db.query_results(filters, limit=query_limit)
 
-        with st.spinner("Summarizing…"):
-            answer = summarize_query(question, ask_results, llm)
+            with st.spinner("Summarizing…"):
+                answer = summarize_query(question, ask_results, llm)
 
-        st.markdown(f"**Answer:** {answer}")
+            st.markdown(f"**Answer:** {answer}")
 
-        with st.expander("Filters this question was translated into"):
-            st.json(filters)
+            with st.expander("Filters this question was translated into"):
+                st.json(filters)
 
-        if ask_results:
-            df_ask = pd.DataFrame(ask_results)
-            df_ask["timestamp"] = pd.to_datetime(df_ask["timestamp"], unit="s")
-            _render_table(df_ask, ["timestamp", "flow_id", "classification", "confidence", "explanation"])
+            if ask_results:
+                df_ask = pd.DataFrame(ask_results)
+                df_ask["timestamp"] = pd.to_datetime(df_ask["timestamp"], unit="s")
+                _render_table(df_ask, ["timestamp", "flow_id", "classification", "confidence", "explanation"])

@@ -43,7 +43,10 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8508 --max-time 5)",
       "Bash(tail -100 /tmp/streamlit_verify7.log 2>&1)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8509 --max-time 5)",
-      "Bash(./venv/Scripts/python.exe -m pytest tests/test_query_parser.py -v)"
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_query_parser.py -v)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_query_parser.py -q)",
+      "Bash(./venv/Scripts/python.exe -m py_compile dashboard/app.py analyzer/query_parser.py)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8510 --max-time 5)"
     ]
   }
 }

@@ -7,7 +7,9 @@ Coverage areas
 --------------
   1. parse() field validation   (only recognized, well-typed keys survive)
   2. parse() fail-safe behavior (bad/missing LLM output -> safe default)
-  3. summarize() behavior       (empty results, normal results, LLM failure)
+  3. interpret() relevance      (off-topic questions get flagged, not a
+                                 data-flavored answer stitched onto them)
+  4. summarize() behavior       (empty results, normal results, LLM failure)
 
 All tests use a fake LLMClient stand-in (not the real network client) so
 this module's own logic is what's under test, independent of llm_client.py.
@@ -157,7 +159,60 @@ class TestParseFailSafe:
 
 
 # ===========================================================================
-# 3. summarize()
+# 3. interpret() relevance detection (regression test: off-topic questions
+#    like "how are you?" must not get a data-flavored answer stitched on)
+# ===========================================================================
+
+class TestInterpretRelevance:
+
+    def test_flow_question_is_marked_relevant(self):
+        llm = FakeLLMClient(json_response={"is_flow_question": True, "classification": "Attack"})
+        filters, is_relevant = query_parser.interpret("show me attacks", llm)
+        assert is_relevant is True
+        assert filters["classification"] == "Attack"
+
+    def test_off_topic_question_is_marked_not_relevant(self):
+        llm = FakeLLMClient(json_response={"is_flow_question": False})
+        filters, is_relevant = query_parser.interpret("how are you?", llm)
+        assert is_relevant is False
+
+    def test_missing_is_flow_question_key_fails_safe_to_relevant(self):
+        """An unnecessary query against real data is harmless; the model
+        just not returning the key shouldn't cause a legitimate question
+        to be refused."""
+        llm = FakeLLMClient(json_response={"classification": "Benign"})
+        filters, is_relevant = query_parser.interpret("show me benign flows", llm)
+        assert is_relevant is True
+
+    def test_non_dict_llm_response_fails_safe_to_relevant(self):
+        llm = FakeLLMClient(json_response="not a dict")
+        filters, is_relevant = query_parser.interpret("anything", llm)
+        assert is_relevant is True
+        assert filters == {"limit": query_parser.DEFAULT_LIMIT}
+
+    def test_non_boolean_is_flow_question_fails_safe_to_relevant(self):
+        llm = FakeLLMClient(json_response={"is_flow_question": "yes"})
+        filters, is_relevant = query_parser.interpret("anything", llm)
+        assert is_relevant is True
+
+    def test_filters_are_still_extracted_regardless_of_relevance_flag(self):
+        """Filter extraction and relevance are independent — even if the
+        model (incorrectly) tags something as off-topic, whatever filters
+        it also returned are still validated normally, since the caller
+        decides what to do with is_flow_question."""
+        llm = FakeLLMClient(json_response={"is_flow_question": False, "classification": "Attack"})
+        filters, is_relevant = query_parser.interpret("nonsense", llm)
+        assert is_relevant is False
+        assert filters["classification"] == "Attack"
+
+    def test_parse_still_returns_filters_only_for_backward_compatibility(self):
+        llm = FakeLLMClient(json_response={"is_flow_question": False, "classification": "Benign"})
+        filters = query_parser.parse("how are you?", llm)
+        assert filters == {"classification": "Benign", "limit": query_parser.DEFAULT_LIMIT}
+
+
+# ===========================================================================
+# 4. summarize()
 # ===========================================================================
 
 class TestSummarize:

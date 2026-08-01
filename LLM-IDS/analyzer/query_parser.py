@@ -22,11 +22,17 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 500
 
 QUERY_SYSTEM_INSTRUCTIONS = f"""
-You translate a security analyst's question about network flow logs into a
-JSON filter object. Return ONLY a valid JSON object with any of these
-optional keys (omit a key entirely if the question doesn't specify it):
+You interpret a question typed into a network flow log search box. Return
+ONLY a valid JSON object with these keys:
 
 {{
+  "is_flow_question": true if the question is actually asking about the
+      captured network flow data — classifications, IPs, ports, protocols,
+      attacks, time ranges, and similar. false for anything else: greetings,
+      small talk, questions unrelated to network data, or requests that
+      have nothing to do with the flow log (e.g. "how are you?", "what's
+      the weather?", "tell me a joke", "write me a poem"). When in doubt
+      between "genuinely about the flow data" and "not", prefer false.,
   "classification": one of {sorted(VALID_CLASSIFICATIONS)},
   "protocol": e.g. "TCP" or "UDP",
   "src_ip": a specific source IP mentioned in the question,
@@ -38,9 +44,11 @@ optional keys (omit a key entirely if the question doesn't specify it):
   "limit": max rows to return, default 50 if not specified
 }}
 
-Only include a key if the question gives clear evidence for it. Do not guess
-IP addresses or ports that were not mentioned. Return nothing but the JSON
-object — no prose, no markdown fences.
+Omit classification/protocol/src_ip/dst_ip/port/since_minutes_ago/limit
+entirely unless is_flow_question is true AND the question gives clear
+evidence for that specific key. Do not guess IP addresses or ports that
+were not mentioned. Return nothing but the JSON object — no prose, no
+markdown fences.
 """
 
 
@@ -48,15 +56,7 @@ def build_query_prompt(question: str) -> str:
     return f"{QUERY_SYSTEM_INSTRUCTIONS}\nQuestion: {question}\n"
 
 
-def parse(question: str, llm_client) -> dict:
-    """Turn a natural-language question into a validated filter dict safe to
-    pass to storage.db.query_results(). Fails safe to an unfiltered, capped
-    query (limit only) if the LLM output is missing, malformed, or contains
-    values outside the expected shape."""
-    raw = llm_client.generate_json(build_query_prompt(question))
-    if not isinstance(raw, dict):
-        raw = {}
-
+def _validate_filters(raw: dict) -> dict:
     filters: dict = {}
 
     classification = raw.get("classification")
@@ -86,6 +86,45 @@ def parse(question: str, llm_client) -> dict:
     else:
         filters["limit"] = DEFAULT_LIMIT
 
+    return filters
+
+
+def interpret(question: str, llm_client):
+    """Single LLM call that both decides whether the question is actually
+    about the captured flow data, and (regardless) extracts whatever
+    filters it can. Returns (filters, is_flow_question).
+
+    Fails safe to (limit-only filters, True) on a missing/malformed LLM
+    response — an unnecessary query against real data is harmless; the
+    worse failure mode is wrongly refusing a legitimate question. But when
+    the model *does* respond and clearly says this isn't a flow question
+    (e.g. "how are you?"), that must be honored — otherwise every
+    off-topic message gets a real-data-flavored answer stitched onto it,
+    which is worse than just declining.
+    """
+    raw = llm_client.generate_json(build_query_prompt(question))
+    if not isinstance(raw, dict):
+        raw = {}
+
+    is_relevant = raw.get("is_flow_question", True)
+    if not isinstance(is_relevant, bool):
+        is_relevant = True
+
+    filters = _validate_filters(raw)
+    return filters, is_relevant
+
+
+def parse(question: str, llm_client) -> dict:
+    """Turn a natural-language question into a validated filter dict safe to
+    pass to storage.db.query_results(). Fails safe to an unfiltered, capped
+    query (limit only) if the LLM output is missing, malformed, or contains
+    values outside the expected shape.
+
+    This is the filters-only view of interpret() — prefer interpret()
+    directly when you also need to know whether the question was actually
+    about flow data (e.g. before running a query/summary pipeline at all).
+    """
+    filters, _ = interpret(question, llm_client)
     return filters
 
 
