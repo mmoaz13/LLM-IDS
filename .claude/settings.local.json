@@ -55,7 +55,18 @@
       "Bash(./venv/Scripts/python.exe -m pytest tests/test_db.py -v)",
       "Bash(./venv/Scripts/python.exe -m pytest tests/test_db.py -v -k \"wal_mode\")",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8511 --max-time 5)",
-      "Bash(curl -s -o /dev/null https://www.github.com --max-time 5)"
+      "Bash(curl -s -o /dev/null https://www.github.com --max-time 5)",
+      "Bash(where pandoc *)",
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -c \"import markdown; print\\('markdown ok'\\)\")",
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -c \"import xhtml2pdf; print\\('xhtml2pdf ok'\\)\")",
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -c \"import reportlab; print\\('reportlab ok'\\)\")",
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -c \"import weasyprint; print\\('weasyprint ok'\\)\")",
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -m pip install --quiet markdown xhtml2pdf)",
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" \"C:\\\\Users\\\\ahmed\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-ahmed-Downloads-Telegram-Desktop-LLM-IDS\\\\9922534f-41f4-45d8-a090-eb1daf5a75b2\\\\scratchpad\\\\md_to_pdf.py\")",
+      "Bash(/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python -c ' *)",
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -m pip install --quiet pypdf)",
+      "Bash(ls \"/c/Windows/Fonts/arial.ttf\" \"/c/Windows/Fonts/arialbd.ttf\" \"/c/Windows/Fonts/ariali.ttf\" \"/c/Windows/Fonts/consola.ttf\" 2>&1)",
+      "Bash(\"/c/Users/ahmed/AppData/Local/Programs/Python/Python313/python\" -m pip install --quiet pymupdf)"
     ]
   }
 }
