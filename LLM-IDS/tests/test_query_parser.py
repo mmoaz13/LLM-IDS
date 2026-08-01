@@ -184,3 +184,53 @@ class TestSummarize:
         query_parser.summarize("what happened?", results, llm)
         assert "what happened?" in llm.last_prompt
         assert "abc" in llm.last_prompt
+
+    def test_prompt_includes_precomputed_classification_counts(self):
+        """Small models are unreliable at counting a JSON list themselves —
+        the prompt must hand over the real counts rather than making the
+        model recount from the sample, which is what led to it rambling
+        about the data format instead of answering."""
+        llm = FakeLLMClient()
+        results = [
+            {"flow_id": "a", "classification": "Attack", "confidence": 0.9,
+             "src_ip": "1.1.1.1", "dst_ip": "2.2.2.2", "dst_port": 22,
+             "protocol": "TCP", "explanation": "x"},
+            {"flow_id": "b", "classification": "Attack", "confidence": 0.9,
+             "src_ip": "1.1.1.1", "dst_ip": "3.3.3.3", "dst_port": 22,
+             "protocol": "TCP", "explanation": "x"},
+            {"flow_id": "c", "classification": "Benign", "confidence": 0.9,
+             "src_ip": "9.9.9.9", "dst_ip": "8.8.8.8", "dst_port": 443,
+             "protocol": "TCP", "explanation": "x"},
+        ]
+        query_parser.summarize("port 22 attacks?", results, llm)
+        assert '"Attack": 2' in llm.last_prompt
+        assert '"Benign": 1' in llm.last_prompt
+
+    def test_prompt_instructs_against_rambling_and_generic_advice(self):
+        """Regression test for the original failure mode: the model would
+        describe the JSON schema and suggest generic analysis techniques
+        instead of directly answering. The prompt must explicitly forbid
+        that."""
+        llm = FakeLLMClient()
+        results = [{"flow_id": "a", "classification": "Benign", "confidence": 0.9,
+                    "src_ip": "1.1.1.1", "dst_ip": "2.2.2.2", "dst_port": 80,
+                    "protocol": "TCP", "explanation": "x"}]
+        query_parser.summarize("anything?", results, llm)
+        prompt_lower = llm.last_prompt.lower()
+        assert "do not" in prompt_lower
+        assert "json structure" in prompt_lower or "field names" in prompt_lower
+
+    def test_sample_is_capped_even_with_many_results(self):
+        """The full result set can be up to MAX_LIMIT (500) rows — the raw
+        per-record sample sent to the LLM must stay small (accuracy comes
+        from the precomputed stats, not from dumping every row)."""
+        llm = FakeLLMClient()
+        results = [
+            {"flow_id": f"flow-{i}", "classification": "Benign", "confidence": 0.9,
+             "src_ip": "1.1.1.1", "dst_ip": "2.2.2.2", "dst_port": 80,
+             "protocol": "TCP", "explanation": "x"}
+            for i in range(50)
+        ]
+        query_parser.summarize("summary?", results, llm)
+        assert llm.last_prompt.count("flow-") <= 15
+        assert '"total_matching_flows": 50' in llm.last_prompt

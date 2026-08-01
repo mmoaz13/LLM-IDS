@@ -14,6 +14,7 @@ supplies query text, only values.
 """
 
 import json
+from collections import Counter
 
 from analyzer.llm_client import VALID_CLASSIFICATIONS
 
@@ -89,16 +90,50 @@ def parse(question: str, llm_client) -> dict:
 
 
 SUMMARY_SYSTEM_INSTRUCTIONS = """
-You are summarizing network flow log results for a security analyst who
-asked a question. Given the question and the matching flow records, write a
-short, plain-English answer (2-4 sentences). Reference concrete numbers and
-patterns from the data (counts, IPs, ports, classifications). If no records
-matched, say so plainly. Do not invent flows that are not in the data.
+You are a security analyst answering a colleague's direct question about
+network flow data, out loud, in conversation. You're given the question,
+some pre-computed statistics, and a sample of the actual matching records.
+
+Answer the question directly in 2-3 sentences, as if speaking to the person
+who asked — not writing documentation about the data. Use the specific
+numbers, IPs, ports, and patterns provided; do not invent anything not
+present. The statistics are already computed correctly — use them as-is
+rather than recounting from the sample yourself.
+
+Do NOT:
+- Describe the JSON structure, field names, or what a "flow_id" or
+  "classification" field means.
+- Explain what the data "could be used for," or suggest analysis techniques
+  (filtering, grouping, visualization, statistics) the person could run.
+- Offer to help further, ask what they'd like to explore next, or add any
+  closing remark beyond the answer itself.
+- Repeat the question back before answering it.
+
+Just answer it. If nothing matched, say that plainly in one sentence.
 """
 
 
+def _aggregate_stats(results: list) -> dict:
+    """Pre-computed, guaranteed-accurate numbers for the prompt — small
+    models are unreliable at counting/grouping a few dozen JSON records
+    themselves, and tend to fill that gap with generic commentary instead.
+    Handing over the actual counts keeps the answer grounded and specific."""
+    classifications = Counter(r.get("classification") for r in results if r.get("classification"))
+    protocols = Counter(r.get("protocol") for r in results if r.get("protocol"))
+    dst_ports = Counter(r.get("dst_port") for r in results if r.get("dst_port"))
+    src_ips = Counter(r.get("src_ip") for r in results if r.get("src_ip"))
+    return {
+        "total_matching_flows": len(results),
+        "count_by_classification": dict(classifications),
+        "count_by_protocol": dict(protocols),
+        "most_common_destination_ports": dst_ports.most_common(5),
+        "most_common_source_ips": src_ips.most_common(5),
+    }
+
+
 def build_summary_prompt(question: str, results: list) -> str:
-    compact = [
+    stats = _aggregate_stats(results)
+    sample = [
         {
             "flow_id": r.get("flow_id"),
             "classification": r.get("classification"),
@@ -109,12 +144,16 @@ def build_summary_prompt(question: str, results: list) -> str:
             "protocol": r.get("protocol"),
             "explanation": r.get("explanation"),
         }
-        for r in results
+        for r in results[:15]
     ]
     return (
         f"{SUMMARY_SYSTEM_INSTRUCTIONS}\n"
-        f"Question: {question}\n"
-        f"Matching records ({len(results)} total):\n{json.dumps(compact, indent=2)}\n"
+        f"Question: {question}\n\n"
+        f"Statistics across all {len(results)} matching flows (already computed — use these numbers):\n"
+        f"{json.dumps(stats, indent=2)}\n\n"
+        f"Sample records ({len(sample)} of {len(results)} shown):\n"
+        f"{json.dumps(sample, indent=2)}\n\n"
+        f"Now answer this question in 2-3 sentences: {question}"
     )
 
 

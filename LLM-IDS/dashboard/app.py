@@ -522,13 +522,15 @@ with TAB_ASK:
         "against storage/flows.db — the LLM only ever supplies filter *values*, never SQL."
     )
 
-    question = st.text_input(
-        "Ask something",
-        placeholder="e.g. Show me attack flows targeting port 22 in the last hour",
-        key="ask_question",
-    )
+    with st.form("ask_form"):
+        question = st.text_input(
+            "Ask something",
+            placeholder="e.g. Show me attack flows targeting port 22 in the last hour",
+            key="ask_question",
+        )
+        asked = st.form_submit_button("Ask")
 
-    if st.button("Ask", key="ask_btn") and question.strip():
+    if asked and question.strip():
         with st.spinner("Interpreting question…"):
             filters = parse_query(question, llm)
 

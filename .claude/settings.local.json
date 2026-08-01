@@ -38,7 +38,12 @@
       "Bash(./venv/Scripts/python.exe -m py_compile dashboard/app.py sniffer/live_session.py)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8506 --max-time 5)",
       "Bash(./venv/Scripts/python.exe -m pytest tests/test_query_parser.py tests/test_db.py -q)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8507 --max-time 5)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8507 --max-time 5)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_traffic_generator.py tests/test_pcap_reader.py -q)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8508 --max-time 5)",
+      "Bash(tail -100 /tmp/streamlit_verify7.log 2>&1)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:8509 --max-time 5)",
+      "Bash(./venv/Scripts/python.exe -m pytest tests/test_query_parser.py -v)"
     ]
   }
 }
